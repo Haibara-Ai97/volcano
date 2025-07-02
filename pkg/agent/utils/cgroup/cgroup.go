@@ -18,6 +18,7 @@ package cgroup
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,7 @@ const (
 	SystemdSuffix       string = ".slice"
 	PodCgroupNamePrefix string = "pod"
 
+	// Cgroupv1 specific files
 	CPUQoSLevelFile string = "cpu.qos_level"
 	CPUUsageFile    string = "cpuacct.usage"
 
@@ -52,12 +54,36 @@ const (
 	NetCLSFileName string = "net_cls.classid"
 
 	CPUShareFileName string = "cpu.shares"
+
+	// Cgroupv2 specific files
+	CPUQoSLevelFileV2 string = "cpu.qos_level"
+	CPUUsageFileV2    string = "cpu.stat"
+
+	CPUQuotaBurstFileV2 string = "cpu.max.burst"
+	CPUQuotaTotalFileV2 string = "cpu.max"
+
+	MemoryUsageFileV2    string = "memory.stat"
+	MemoryQoSLevelFileV2 string = "memory.qos_level"
+	MemoryLimitFileV2    string = "memory.max"
+
+	NetCLSFileNameV2 string = "net_cls.classid"
+
+	CPUShareFileNameV2 string = "cpu.weight"
+
+	// Cgroup version constants
+	CgroupV1 string = "v1"
+	CgroupV2 string = "v2"
+
+	// Default cgroup mount points
+	DefaultCgroupV1MountPoint string = "/sys/fs/cgroup"
+	DefaultCgroupV2MountPoint string = "/sys/fs/cgroup"
 )
 
 type CgroupManager interface {
 	GetRootCgroupPath(cgroupSubsystem CgroupSubsystem) (string, error)
 	GetQoSCgroupPath(qos corev1.PodQOSClass, cgroupSubsystem CgroupSubsystem) (string, error)
 	GetPodCgroupPath(qos corev1.PodQOSClass, cgroupSubsystem CgroupSubsystem, podUID types.UID) (string, error)
+	GetCgroupVersion() string
 }
 
 type CgroupManagerImpl struct {
@@ -69,14 +95,80 @@ type CgroupManagerImpl struct {
 
 	// kubeCgroupRoot sames with kubelet configuration "cgroup-root"
 	kubeCgroupRoot string
+
+	// cgroupVersion indicates the cgroup version (v1 or v2)
+	cgroupVersion string
 }
 
-func NewCgroupManager(cgroupDriver, cgroupRoot, kubeCgroupRoot string) CgroupManager {
-	return &CgroupManagerImpl{
-		cgroupDriver:   cgroupDriver,
-		cgroupRoot:     cgroupRoot,
-		kubeCgroupRoot: kubeCgroupRoot,
+type CgroupV2ManagerImpl struct {
+	// cgroupDriver is the driver that the kubelet uses to manipulate cgroups on the host (cgroupfs or systemd)
+	cgroupDriver string
+
+	// cgroupRoot is the root cgroup to use for pods.
+	cgroupRoot string
+
+	// kubeCgroupRoot sames with kubelet configuration "cgroup-root"
+	kubeCgroupRoot string
+
+	// cgroupVersion indicates the cgroup version (v1 or v2)
+	cgroupVersion string
+}
+
+// DetectCgroupVersion detects the cgroup version on the system
+func DetectCgroupVersion() (string, error) {
+	// Check if cgroup v2 is mounted
+	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err == nil {
+		return CgroupV2, nil
 	}
+
+	// Check if cgroup v1 is mounted
+	if _, err := os.Stat("/sys/fs/cgroup/cpu"); err == nil {
+		return CgroupV1, nil
+	}
+
+	// Check for hybrid mode (v1 and v2)
+	if _, err := os.Stat("/sys/fs/cgroup/unified"); err == nil {
+		return CgroupV2, nil
+	}
+
+	return "", fmt.Errorf("unable to detect cgroup version")
+}
+
+// NewCgroupManager creates a new cgroup manager based on the detected cgroup version
+func NewCgroupManager(cgroupDriver, cgroupRoot, kubeCgroupRoot string) (CgroupManager, error) {
+	cgroupVersion, err := DetectCgroupVersion()
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect cgroup version: %v", err)
+	}
+
+	switch cgroupVersion {
+	case CgroupV1:
+		return &CgroupManagerImpl{
+			cgroupDriver:   cgroupDriver,
+			cgroupRoot:     cgroupRoot,
+			kubeCgroupRoot: kubeCgroupRoot,
+			cgroupVersion:  cgroupVersion,
+		}, nil
+	case CgroupV2:
+		return &CgroupV2ManagerImpl{
+			cgroupDriver:   cgroupDriver,
+			cgroupRoot:     cgroupRoot,
+			kubeCgroupRoot: kubeCgroupRoot,
+			cgroupVersion:  cgroupVersion,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported cgroup version: %s", cgroupVersion)
+	}
+}
+
+// GetCgroupVersion returns the cgroup version
+func (c *CgroupManagerImpl) GetCgroupVersion() string {
+	return c.cgroupVersion
+}
+
+// GetCgroupVersion returns the cgroup version
+func (c *CgroupV2ManagerImpl) GetCgroupVersion() string {
+	return c.cgroupVersion
 }
 
 func (c *CgroupManagerImpl) GetRootCgroupPath(cgroupSubsystem CgroupSubsystem) (string, error) {
@@ -90,6 +182,20 @@ func (c *CgroupManagerImpl) GetRootCgroupPath(cgroupSubsystem CgroupSubsystem) (
 		return "", err
 	}
 	return filepath.Join(c.cgroupRoot, string(cgroupSubsystem), cgroupPath), err
+}
+
+func (c *CgroupV2ManagerImpl) GetRootCgroupPath(cgroupSubsystem CgroupSubsystem) (string, error) {
+	cgroupName := []string{CgroupKubeRoot}
+	if c.kubeCgroupRoot != "" {
+		cgroupName = append([]string{c.kubeCgroupRoot}, cgroupName...)
+	}
+
+	cgroupPath, err := c.CgroupNameToCgroupPath(cgroupName)
+	if err != nil {
+		return "", err
+	}
+	// In cgroup v2, all controllers are unified under a single hierarchy
+	return filepath.Join(c.cgroupRoot, cgroupPath), err
 }
 
 func (c *CgroupManagerImpl) GetQoSCgroupPath(qos corev1.PodQOSClass, cgroupSubsystem CgroupSubsystem) (string, error) {
@@ -109,6 +215,26 @@ func (c *CgroupManagerImpl) GetQoSCgroupPath(qos corev1.PodQOSClass, cgroupSubsy
 		return "", err
 	}
 	return filepath.Join(c.cgroupRoot, string(cgroupSubsystem), cgroupPath), err
+}
+
+func (c *CgroupV2ManagerImpl) GetQoSCgroupPath(qos corev1.PodQOSClass, cgroupSubsystem CgroupSubsystem) (string, error) {
+	cgroupName := []string{CgroupKubeRoot}
+	if c.kubeCgroupRoot != "" {
+		cgroupName = append([]string{c.kubeCgroupRoot}, cgroupName...)
+	}
+	switch qos {
+	case corev1.PodQOSBurstable:
+		cgroupName = append(cgroupName, "burstable")
+	case corev1.PodQOSBestEffort:
+		cgroupName = append(cgroupName, "besteffort")
+	}
+
+	cgroupPath, err := c.CgroupNameToCgroupPath(cgroupName)
+	if err != nil {
+		return "", err
+	}
+	// In cgroup v2, all controllers are unified under a single hierarchy
+	return filepath.Join(c.cgroupRoot, cgroupPath), err
 }
 
 func (c *CgroupManagerImpl) GetPodCgroupPath(qos corev1.PodQOSClass, cgroupSubsystem CgroupSubsystem, podUID types.UID) (string, error) {
@@ -131,7 +257,39 @@ func (c *CgroupManagerImpl) GetPodCgroupPath(qos corev1.PodQOSClass, cgroupSubsy
 	return filepath.Join(c.cgroupRoot, string(cgroupSubsystem), cgroupPath), err
 }
 
+func (c *CgroupV2ManagerImpl) GetPodCgroupPath(qos corev1.PodQOSClass, cgroupSubsystem CgroupSubsystem, podUID types.UID) (string, error) {
+	cgroupName := []string{CgroupKubeRoot}
+	if c.kubeCgroupRoot != "" {
+		cgroupName = append([]string{c.kubeCgroupRoot}, cgroupName...)
+	}
+	switch qos {
+	case corev1.PodQOSBurstable:
+		cgroupName = append(cgroupName, "burstable")
+	case corev1.PodQOSBestEffort:
+		cgroupName = append(cgroupName, "besteffort")
+	}
+	cgroupName = append(cgroupName, getPodCgroupNameSuffix(podUID))
+
+	cgroupPath, err := c.CgroupNameToCgroupPath(cgroupName)
+	if err != nil {
+		return "", err
+	}
+	// In cgroup v2, all controllers are unified under a single hierarchy
+	return filepath.Join(c.cgroupRoot, cgroupPath), err
+}
+
 func (c *CgroupManagerImpl) CgroupNameToCgroupPath(cgroupName []string) (string, error) {
+	switch c.cgroupDriver {
+	case "cgroupfs":
+		return CgroupName(cgroupName).ToCgroupfs()
+	case "systemd":
+		return CgroupName(cgroupName).ToSystemd()
+	default:
+		return "", fmt.Errorf("unsupported cgroup driver: %s", c.cgroupDriver)
+	}
+}
+
+func (c *CgroupV2ManagerImpl) CgroupNameToCgroupPath(cgroupName []string) (string, error) {
 	switch c.cgroupDriver {
 	case "cgroupfs":
 		return CgroupName(cgroupName).ToCgroupfs()
