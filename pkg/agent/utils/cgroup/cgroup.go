@@ -77,6 +77,10 @@ const (
 	// Default cgroup mount points
 	DefaultCgroupV1MountPoint string = "/sys/fs/cgroup"
 	DefaultCgroupV2MountPoint string = "/sys/fs/cgroup"
+
+	// Cgroup driver types
+	CgroupDriverSystemd  string = "systemd"
+	CgroupDriverCgroupfs string = "cgroupfs"
 )
 
 type CgroupManager interface {
@@ -114,6 +118,131 @@ type CgroupV2ManagerImpl struct {
 	cgroupVersion string
 }
 
+// GetCgroupDriver gets the cgroup driver from multiple sources in order of priority
+func GetCgroupDriver() string {
+	// 1. Try to get from environment variable
+	if driver := os.Getenv("CGROUP_DRIVER"); driver != "" {
+		if driver == CgroupDriverSystemd || driver == CgroupDriverCgroupfs {
+			return driver
+		}
+	}
+
+	// 2. Try to read from kubelet config file
+	if driver := readKubeletCgroupDriver(); driver != "" {
+		return driver
+	}
+
+	// 3. Try to detect from system
+	if driver, err := DetectCgroupDriver(); err == nil {
+		return driver
+	}
+
+	// 4. Default fallback
+	return CgroupDriverCgroupfs
+}
+
+// readKubeletCgroupDriver reads cgroup driver from kubelet config file
+func readKubeletCgroupDriver() string {
+	// Common kubelet config file paths
+	configPaths := []string{
+		"/var/lib/kubelet/config.yaml",
+		"/etc/kubernetes/kubelet.conf",
+		"/var/lib/kubelet/kubeadm-flags.env",
+	}
+
+	for _, configPath := range configPaths {
+		if driver := parseKubeletConfig(configPath); driver != "" {
+			return driver
+		}
+	}
+
+	return ""
+}
+
+// parseKubeletConfig parses kubelet config file to extract cgroup driver
+func parseKubeletConfig(configPath string) string {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+
+	content := string(data)
+
+	// Look for cgroupDriver in YAML format
+	if strings.Contains(content, "cgroupDriver:") {
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "cgroupDriver:") {
+				driver := strings.TrimSpace(strings.TrimPrefix(line, "cgroupDriver:"))
+				if driver == CgroupDriverSystemd || driver == CgroupDriverCgroupfs {
+					return driver
+				}
+			}
+		}
+	}
+
+	// Look for --cgroup-driver in command line arguments
+	if strings.Contains(content, "--cgroup-driver") {
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, "--cgroup-driver") {
+				parts := strings.Fields(line)
+				for i, part := range parts {
+					if part == "--cgroup-driver" && i+1 < len(parts) {
+						driver := parts[i+1]
+						if driver == CgroupDriverSystemd || driver == CgroupDriverCgroupfs {
+							return driver
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// DetectCgroupDriver detects the cgroup driver (cgroupfs or systemd) on the system
+func DetectCgroupDriver() (string, error) {
+	// Check if systemd is managing cgroups by looking for systemd cgroup hierarchy
+	// In systemd-managed systems, there's typically a systemd slice at the root
+	if _, err := os.Stat("/sys/fs/cgroup/system.slice"); err == nil {
+		return CgroupDriverSystemd, nil
+	}
+
+	// Check if we can find systemd cgroup paths
+	if _, err := os.Stat("/sys/fs/cgroup/systemd"); err == nil {
+		return CgroupDriverSystemd, nil
+	}
+
+	// Check for cgroupfs by looking for traditional cgroup hierarchy
+	// In cgroupfs systems, we typically see individual controller directories
+	if _, err := os.Stat("/sys/fs/cgroup/cpu"); err == nil {
+		return CgroupDriverCgroupfs, nil
+	}
+
+	// Additional check for cgroup v2 with cgroupfs driver
+	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err == nil {
+		// Check if systemd is not managing this hierarchy
+		if _, err := os.Stat("/sys/fs/cgroup/system.slice"); err != nil {
+			return CgroupDriverCgroupfs, nil
+		}
+	}
+
+	// Check for hybrid mode where systemd might be managing some controllers
+	if _, err := os.Stat("/sys/fs/cgroup/unified"); err == nil {
+		// In hybrid mode, check if systemd is managing the unified hierarchy
+		if _, err := os.Stat("/sys/fs/cgroup/unified/system.slice"); err == nil {
+			return CgroupDriverSystemd, nil
+		}
+		return CgroupDriverCgroupfs, nil
+	}
+
+	return "", fmt.Errorf("unable to detect cgroup driver")
+}
+
 // DetectCgroupVersion detects the cgroup version on the system
 func DetectCgroupVersion() (string, error) {
 	// Check if cgroup v2 is mounted
@@ -135,29 +264,34 @@ func DetectCgroupVersion() (string, error) {
 }
 
 // NewCgroupManager creates a new cgroup manager based on the detected cgroup version
-func NewCgroupManager(cgroupDriver, cgroupRoot, kubeCgroupRoot string) (CgroupManager, error) {
+func NewCgroupManager(cgroupDriver, cgroupRoot, kubeCgroupRoot string) CgroupManager {
 	cgroupVersion, err := DetectCgroupVersion()
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect cgroup version: %v", err)
+		return nil
 	}
 
-	switch cgroupVersion {
+	// Auto-detect cgroupDriver if not provided
+	if cgroupDriver == "" {
+		cgroupDriver = GetCgroupDriver()
+	}
+
+	switch version := cgroupVersion; version {
 	case CgroupV1:
 		return &CgroupManagerImpl{
 			cgroupDriver:   cgroupDriver,
 			cgroupRoot:     cgroupRoot,
 			kubeCgroupRoot: kubeCgroupRoot,
 			cgroupVersion:  cgroupVersion,
-		}, nil
+		}
 	case CgroupV2:
 		return &CgroupV2ManagerImpl{
 			cgroupDriver:   cgroupDriver,
 			cgroupRoot:     cgroupRoot,
 			kubeCgroupRoot: kubeCgroupRoot,
 			cgroupVersion:  cgroupVersion,
-		}, nil
+		}
 	default:
-		return nil, fmt.Errorf("unsupported cgroup version: %s", cgroupVersion)
+		return nil
 	}
 }
 

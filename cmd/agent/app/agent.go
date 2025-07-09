@@ -70,7 +70,9 @@ func Run(ctx context.Context, opts *options.VolcanoAgentOptions) error {
 	if sfsFsPath == "" {
 		sfsFsPath = utils.DefaultSysFsPath
 	}
-	cgroupManager := cgroup.NewCgroupManager("cgroupfs", path.Join(sfsFsPath, "cgroup"), conf.GenericConfiguration.KubeCgroupRoot)
+
+	cgroupDriver := cgroup.GetCgroupDriver()
+	cgroupManager := cgroup.NewCgroupManager(cgroupDriver, path.Join(sfsFsPath, "cgroup"), conf.GenericConfiguration.KubeCgroupRoot)
 	metricCollectorManager, err := metriccollect.NewMetricCollectorManager(conf, cgroupManager)
 	if err != nil {
 		return fmt.Errorf("failed to create metric collector manager: %v", err)
