@@ -60,7 +60,7 @@ func (c *CPUResourceCollector) CollectLocalMetrics(metricInfo *LocalMetricInfo, 
 		return nil, err
 	}
 
-	podAllUsage, err := getMilliCPUUsage(cgroupPath)
+	podAllUsage, err := getMilliCPUUsage(cgroupPath, c.cgroupManager.GetCgroupVersion())
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (c *CPUResourceCollector) CollectLocalMetrics(metricInfo *LocalMetricInfo, 
 				return nil, err
 			}
 
-			count, err := getMilliCPUUsage(cgroupPath)
+			count, err := getMilliCPUUsage(cgroupPath, c.cgroupManager.GetCgroupVersion())
 			if err != nil {
 				return nil, err
 			}
@@ -102,9 +102,18 @@ func (c *CPUResourceCollector) CollectLocalMetrics(metricInfo *LocalMetricInfo, 
 	return []*prompb.TimeSeries{&sample}, nil
 }
 
-func getMilliCPUUsage(cgroupRoot string) (int64, error) {
+func getMilliCPUUsage(cgroupRoot string, cgroupVersion string) (int64, error) {
 	startTime := time.Now().UnixNano()
-	cgroupsCPU := filepath.Join(cgroupRoot, cgroup.CPUUsageFile)
+
+	// Choose the correct CPU usage file based on cgroup version
+	var cpuUsageFile string
+	if cgroupVersion == cgroup.CgroupV2 {
+		cpuUsageFile = cgroup.CPUUsageFileV2
+	} else {
+		cpuUsageFile = cgroup.CPUUsageFile
+	}
+
+	cgroupsCPU := filepath.Join(cgroupRoot, cpuUsageFile)
 	startUsage, err := file.ReadIntFromFile(cgroupsCPU)
 	if err != nil {
 		return 0, err
