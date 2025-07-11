@@ -88,13 +88,22 @@ func (c *CPUBurstHandle) Handle(event interface{}) error {
 
 	quotaBurstTime := getCPUBurstTime(pod)
 	podBurstTime := int64(0)
-	err = filepath.WalkDir(cgroupPath, walkFunc(cgroupPath, quotaBurstTime, &podBurstTime))
+	err = filepath.WalkDir(cgroupPath, walkFunc(cgroupPath, quotaBurstTime, &podBurstTime, c.cgroupMgr.GetCgroupVersion()))
 	if err != nil {
 		return fmt.Errorf("failed to set container cpu quota burst time, err: %v", err)
 	}
 
 	// last set pod cgroup cpu quota burst.
-	podQuotaTotalFile := filepath.Join(cgroupPath, cgroup.CPUQuotaTotalFile)
+	cgroupVersion := c.cgroupMgr.GetCgroupVersion()
+	var podQuotaTotalFile, podQuotaBurstFile string
+	if cgroupVersion == cgroup.CgroupV2 {
+		podQuotaTotalFile = filepath.Join(cgroupPath, cgroup.CPUQuotaTotalFileV2)
+		podQuotaBurstFile = filepath.Join(cgroupPath, cgroup.CPUQuotaBurstFileV2)
+	} else {
+		podQuotaTotalFile = filepath.Join(cgroupPath, cgroup.CPUQuotaTotalFile)
+		podQuotaBurstFile = filepath.Join(cgroupPath, cgroup.CPUQuotaBurstFile)
+	}
+	
 	value, err := file.ReadIntFromFile(podQuotaTotalFile)
 	if err != nil {
 		return fmt.Errorf("failed to get pod cpu total quota time, err: %v,path: %s", err, podQuotaTotalFile)
@@ -102,7 +111,6 @@ func (c *CPUBurstHandle) Handle(event interface{}) error {
 	if value == fixedQuotaValue {
 		return nil
 	}
-	podQuotaBurstFile := filepath.Join(cgroupPath, cgroup.CPUQuotaBurstFile)
 	err = utils.UpdateFile(podQuotaBurstFile, []byte(strconv.FormatInt(podBurstTime, 10)))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -116,7 +124,7 @@ func (c *CPUBurstHandle) Handle(event interface{}) error {
 	return nil
 }
 
-func walkFunc(cgroupPath string, quotaBurstTime int64, podBurstTime *int64) fs.WalkDirFunc {
+func walkFunc(cgroupPath string, quotaBurstTime int64, podBurstTime *int64, cgroupVersion string) fs.WalkDirFunc {
 	return func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -128,7 +136,16 @@ func walkFunc(cgroupPath string, quotaBurstTime int64, podBurstTime *int64) fs.W
 		if d == nil || !d.IsDir() {
 			return nil
 		}
-		quotaTotalFile := filepath.Join(path, cgroup.CPUQuotaTotalFile)
+		
+		var quotaTotalFile, quotaBurstFile string
+		if cgroupVersion == cgroup.CgroupV2 {
+			quotaTotalFile = filepath.Join(path, cgroup.CPUQuotaTotalFileV2)
+			quotaBurstFile = filepath.Join(path, cgroup.CPUQuotaBurstFileV2)
+		} else {
+			quotaTotalFile = filepath.Join(path, cgroup.CPUQuotaTotalFile)
+			quotaBurstFile = filepath.Join(path, cgroup.CPUQuotaBurstFile)
+		}
+		
 		quotaTotal, err := file.ReadIntFromFile(quotaTotalFile)
 		if err != nil {
 			return fmt.Errorf("failed to get container cpu total quota time, err: %v, path: %s", err, quotaTotalFile)
@@ -146,7 +163,6 @@ func walkFunc(cgroupPath string, quotaBurstTime int64, podBurstTime *int64) fs.W
 			actualBurst = quotaTotal
 		}
 		*podBurstTime += actualBurst
-		quotaBurstFile := filepath.Join(path, cgroup.CPUQuotaBurstFile)
 		err = utils.UpdateFile(quotaBurstFile, []byte(strconv.FormatInt(actualBurst, 10)))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
