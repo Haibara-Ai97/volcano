@@ -114,20 +114,71 @@ func getMilliCPUUsage(cgroupRoot string, cgroupVersion string) (int64, error) {
 	}
 
 	cgroupsCPU := filepath.Join(cgroupRoot, cpuUsageFile)
-	startUsage, err := file.ReadIntFromFile(cgroupsCPU)
+
+	var startUsage int64
+	var err error
+	if cgroupVersion == cgroup.CgroupV2 {
+		startUsage, err = readCPUUsageV2(cgroupsCPU)
+	} else {
+		startUsage, err = file.ReadIntFromFile(cgroupsCPU)
+	}
 	if err != nil {
 		return 0, err
 	}
+
 	time.Sleep(1 * time.Second)
 	endTime := time.Now().UnixNano()
-	endUsage, err := file.ReadIntFromFile(cgroupsCPU)
+
+	var endUsage int64
+	if cgroupVersion == cgroup.CgroupV2 {
+		endUsage, err = readCPUUsageV2(cgroupsCPU)
+	} else {
+		endUsage, err = file.ReadIntFromFile(cgroupsCPU)
+	}
 	if err != nil {
 		return 0, err
 	}
+
 	if endTime-startTime == 0 {
 		return 0, fmt.Errorf("statistic time is zero")
 	}
 	return (endUsage - startUsage) * 1000 / (endTime - startTime), nil
+}
+
+// readCPUUsageV2 reads CPU usage from cgroup v2 cpu.stat file
+// The file contains key-value pairs like:
+// usage_usec 1440517797
+// user_usec 743069104
+// system_usec 697448693
+// ...
+func readCPUUsageV2(filePath string) (int64, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return 0, err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+
+		if fields[0] == "usage_usec" {
+			value, err := strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("failed to parse usage_usec value: %v", err)
+			}
+			return value, nil
+		}
+	}
+
+	return 0, fmt.Errorf("usage_usec field not found in cpu.stat file")
 }
 
 func nodeCPUState() (uint64, error) {
