@@ -29,6 +29,7 @@ import (
 	"volcano.sh/volcano/pkg/agent/events/handlers"
 	"volcano.sh/volcano/pkg/agent/features"
 	"volcano.sh/volcano/pkg/agent/oversubscription/policy"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 	"volcano.sh/volcano/pkg/agent/oversubscription/queue"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 	"volcano.sh/volcano/pkg/agent/utils/eviction"
@@ -50,7 +51,7 @@ type manager struct {
 	getPodsFunc utilpod.ActivePods
 }
 
-func NewManager(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) framework.Handle {
+func NewManager(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
 	evictor := eviction.NewEviction(config.GenericConfiguration.KubeClient, config.GenericConfiguration.KubeNodeName)
 	m := &manager{
 		cfg:         config,

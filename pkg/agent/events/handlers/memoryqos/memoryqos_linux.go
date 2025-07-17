@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	"k8s.io/klog/v2"
 
@@ -44,7 +45,7 @@ type MemoryQoSHandle struct {
 	cgroupMgr cgroup.CgroupManager
 }
 
-func NewMemoryQoSHandle(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) framework.Handle {
+func NewMemoryQoSHandle(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
 	return &MemoryQoSHandle{
 		BaseHandle: &base.BaseHandle{
 			Name:   string(features.MemoryQoSFeature),

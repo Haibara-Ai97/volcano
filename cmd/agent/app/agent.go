@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	"github.com/spf13/cobra"
 	cliflag "k8s.io/component-base/cli/flag"
@@ -71,6 +72,7 @@ func Run(ctx context.Context, opts *options.VolcanoAgentOptions) error {
 		sfsFsPath = utils.DefaultSysFsPath
 	}
 
+	// todo: replace all cgroupManager with resourceManager
 	cgroupDriver := cgroup.GetCgroupDriver()
 	cgroupManager := cgroup.NewCgroupManager(cgroupDriver, path.Join(sfsFsPath, "cgroup"), conf.GenericConfiguration.KubeCgroupRoot)
 	metricCollectorManager, err := metriccollect.NewMetricCollectorManager(conf, cgroupManager)
@@ -84,7 +86,8 @@ func Run(ctx context.Context, opts *options.VolcanoAgentOptions) error {
 		return fmt.Errorf("failed to init network qos: %v", err)
 	}
 
-	eventManager := events.NewEventManager(conf, metricCollectorManager, cgroupManager)
+	resourceMgr := resourcemanager.NewResourceManager("cgroupv1", cgroupDriver, cgroupManager)
+	eventManager := events.NewEventManager(conf, metricCollectorManager, cgroupManager, resourceMgr)
 	err = eventManager.Run(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to run event manager: %v", err)

@@ -18,6 +18,7 @@ package handlers
 
 import (
 	"sync"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	"volcano.sh/volcano/pkg/agent/events/framework"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
@@ -28,7 +29,7 @@ import (
 var handlerFuncs = map[string][]NewEventHandleFunc{}
 var mutex sync.Mutex
 
-type NewEventHandleFunc = func(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) framework.Handle
+type NewEventHandleFunc = func(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle
 
 func RegisterEventHandleFunc(eventName string, f NewEventHandleFunc) {
 	mutex.Lock()

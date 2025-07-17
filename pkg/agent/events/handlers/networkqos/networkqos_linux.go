@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -53,7 +54,7 @@ type NetworkQoSHandle struct {
 	recorder      record.EventRecorder
 }
 
-func NewNetworkQoSHandle(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) framework.Handle {
+func NewNetworkQoSHandle(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
 	return &NetworkQoSHandle{
 		BaseHandle: &base.BaseHandle{
 			Name:   string(features.NetworkQoSFeature),

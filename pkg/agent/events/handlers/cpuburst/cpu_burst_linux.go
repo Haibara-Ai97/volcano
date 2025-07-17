@@ -32,6 +32,7 @@ import (
 	"volcano.sh/volcano/pkg/agent/events/handlers"
 	"volcano.sh/volcano/pkg/agent/events/handlers/base"
 	"volcano.sh/volcano/pkg/agent/features"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 	"volcano.sh/volcano/pkg/agent/utils"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 	"volcano.sh/volcano/pkg/agent/utils/file"
@@ -49,7 +50,7 @@ type CPUBurstHandle struct {
 	podInformer v1.PodInformer
 }
 
-func NewCPUBurst(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) framework.Handle {
+func NewCPUBurst(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
 	return &CPUBurstHandle{
 		BaseHandle: &base.BaseHandle{
 			Name:   string(features.CPUBurstFeature),

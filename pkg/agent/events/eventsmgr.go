@@ -18,6 +18,7 @@ package events
 
 import (
 	"context"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	"k8s.io/klog/v2"
 
@@ -46,9 +47,10 @@ type EventManager struct {
 	config               *config.Configuration
 	metricCollectManager *metriccollect.MetricCollectorManager
 	configMgr            *coloconfig.ConfigManager
+	resourceMgr          *resourcemanager.ResourceManager
 }
 
-func NewEventManager(config *config.Configuration, metricCollectManager *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) *EventManager {
+func NewEventManager(config *config.Configuration, metricCollectManager *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resoureMgr *resourcemanager.ResourceManager) *EventManager {
 	factory := &framework.EventQueueFactory{}
 	factory.Queues = make(map[string]*framework.EventQueue)
 	mgr := &EventManager{
@@ -56,6 +58,7 @@ func NewEventManager(config *config.Configuration, metricCollectManager *metricc
 		metricCollectManager: metricCollectManager,
 		eventQueueFactory:    factory,
 		configMgr:            coloconfig.NewManager(config, []coloconfig.Listener{factory}),
+		resourceMgr:          resoureMgr,
 	}
 
 	for eventName, newProbeFuncs := range probes.GetEventProbeFuncs() {
@@ -68,7 +71,7 @@ func NewEventManager(config *config.Configuration, metricCollectManager *metricc
 
 	for eventName, newHandleFuncs := range handlers.GetEventHandlerFuncs() {
 		for _, newHandleFunc := range newHandleFuncs {
-			handle := newHandleFunc(config, metricCollectManager, cgroupMgr)
+			handle := newHandleFunc(config, metricCollectManager, cgroupMgr, resoureMgr)
 			mgr.eventQueueFactory.RegistryEventHandler(eventName, handle)
 		}
 	}

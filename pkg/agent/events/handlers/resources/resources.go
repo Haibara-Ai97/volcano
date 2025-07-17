@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/klog/v2"
@@ -45,7 +46,7 @@ type ResourcesHandle struct {
 	cgroupMgr cgroup.CgroupManager
 }
 
-func NewResources(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) framework.Handle {
+func NewResources(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
 	return &ResourcesHandle{
 		BaseHandle: &base.BaseHandle{
 			Name:   string(features.ResourcesFeature),

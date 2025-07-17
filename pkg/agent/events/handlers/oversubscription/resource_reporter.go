@@ -18,6 +18,7 @@ package oversubscription
 
 import (
 	"reflect"
+	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
@@ -56,7 +57,7 @@ type reporter struct {
 	reportTimes int64
 }
 
-func NewReporter(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager) framework.Handle {
+func NewReporter(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
 	evictor := eviction.NewEviction(config.GenericConfiguration.KubeClient, config.GenericConfiguration.KubeNodeName)
 	return &reporter{
 		BaseHandle: &base.BaseHandle{
