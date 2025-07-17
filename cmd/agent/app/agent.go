@@ -86,7 +86,8 @@ func Run(ctx context.Context, opts *options.VolcanoAgentOptions) error {
 		return fmt.Errorf("failed to init network qos: %v", err)
 	}
 
-	resourceMgr := resourcemanager.NewResourceManager("cgroupv1", cgroupDriver, cgroupManager)
+	cgroupVersion := cgroupManager.GetCgroupVersion()
+	resourceMgr := resourcemanager.NewResourceManager(cgroupVersion, cgroupDriver, cgroupManager)
 	eventManager := events.NewEventManager(conf, metricCollectorManager, cgroupManager, resourceMgr)
 	err = eventManager.Run(ctx)
 	if err != nil {

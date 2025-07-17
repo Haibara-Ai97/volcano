@@ -23,7 +23,7 @@ func (rhf *ResourceHandlerFactory) CreateResourceHandler(cgroupDriver string) Re
 	case "cgroupfs":
 		return cgroupresourcehandler.NewCgroupResourceHandler(rhf.cgroupManager, rhf.cgroupVersion)
 	case "systemd":
-		return systemdresourcehandler.NewSystemdResourceHandler()
+		return systemdresourcehandler.NewSystemdResourceHandler(rhf.cgroupManager, rhf.cgroupVersion)
 	}
 	return nil
 }

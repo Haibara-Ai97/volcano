@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
-	"os"
-	"path"
 	calutils "volcano.sh/volcano/pkg/agent/resourcemanager/utils"
 	"volcano.sh/volcano/pkg/agent/utils"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
@@ -70,7 +71,7 @@ func (crh *CgroupResourceHandler) setCPUWeightAndQuota(cgroupPath string, qosLev
 
 	if cpuQuota := calutils.CalculateCPUQuotaFromQoSLevel(qosLevel); cpuQuota > 0 {
 		cpuMaxFile := path.Join(cgroupPath, cgroup.CPUQuotaTotalFileV2)
-		cpuMaxByte := []byte(fmt.Sprintf("%d", cpuMaxFile))
+		cpuMaxByte := []byte(fmt.Sprintf("%d", cpuQuota))
 
 		err = utils.UpdatePodCgroup(cpuMaxFile, cpuMaxByte)
 		if err != nil {
