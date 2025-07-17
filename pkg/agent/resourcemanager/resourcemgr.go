@@ -24,7 +24,7 @@ type ResourceHandler interface {
 }
 
 func NewResourceManager(cgroupVersion, cgroupDriver string, cgroupManger cgroup.CgroupManager) *ResourceManager {
-	factory := NewResourceManagerFactory(cgroupManger)
+	factory := NewResourceManagerFactory(cgroupManger, cgroupVersion)
 	handler := factory.CreateResourceHandler(cgroupDriver)
 
 	return &ResourceManager{

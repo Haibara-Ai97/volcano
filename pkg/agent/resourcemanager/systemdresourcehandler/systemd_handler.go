@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"strings"
+	"volcano.sh/volcano/pkg/agent/resourcemanager/utils"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 )
 
@@ -44,7 +45,7 @@ func (srh *SystemdResourceHandler) getServiceName(podUID types.UID, qosClass cor
 func (srh *SystemdResourceHandler) setQoSLevelViaDBus(serviceName string, qosLevel int64) error {
 	obj := srh.conn.Object("org.freedesktop.systemd1", dbus.ObjectPath("/org/freedesktop/systemd1"))
 
-	cpuWeight := CalculateCPUParamsFromQoSLevel(qosLevel)
+	cpuWeight := utils.CalculateCPUWeightFromQoSLevel(qosLevel)
 	cpuWeightVariant := dbus.MakeVariant(cpuWeight)
 
 	call := obj.Call("org.freedesktop.systemd1.Manager.SetUnitProperties", 0,
@@ -56,19 +57,4 @@ func (srh *SystemdResourceHandler) setQoSLevelViaDBus(serviceName string, qosLev
 	}
 
 	return nil
-}
-
-func CalculateCPUParamsFromQoSLevel(qosLevel int64) uint64 {
-	switch qosLevel {
-	case 2:
-		return 1000
-	case 1:
-		return 500
-	case 0:
-		return 100
-	case -1:
-		return 50
-	default:
-		return 100
-	}
 }

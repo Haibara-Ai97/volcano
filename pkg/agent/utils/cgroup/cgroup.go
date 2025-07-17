@@ -56,8 +56,8 @@ const (
 	CPUShareFileName string = "cpu.shares"
 
 	// Cgroupv2 specific files
-	CPUQoSLevelFileV2 string = "cpu.qos_level"
-	CPUUsageFileV2    string = "cpu.stat"
+	CPUWeightFileV2 string = "cpu.weight"
+	CPUUsageFileV2  string = "cpu.stat"
 
 	CPUQuotaBurstFileV2 string = "cpu.max.burst"
 	CPUQuotaTotalFileV2 string = "cpu.max"
