@@ -17,6 +17,7 @@ limitations under the License.
 package pod
 
 import (
+	"fmt"
 	"strings"
 
 	v1 "k8s.io/api/core/v1"
@@ -46,6 +47,12 @@ type Resources struct {
 	ContainerID     string
 	SubPath         string
 	Value           int64
+}
+
+type ResourcesSystemd struct {
+	ContainerID string
+	Property    string
+	Value       string
 }
 
 // CalculateExtendResources calculates pod and container that use extend resource level cgroup resource, include cpu and memory
@@ -153,4 +160,255 @@ func milliCPUToShares(milliCPU int64) uint64 {
 		return maxShares
 	}
 	return uint64(shares)
+}
+
+func CalculateExtendResourcesV2(pod *v1.Pod) []Resources {
+	containerRes := []Resources{}
+	cpuWeightTotal, cpuMaxTotal, memoryMaxTotal := int64(0), int64(0), int64(0)
+	cpuLimitsDeclared := true
+	memoryLimitsDeclared := true
+
+	for _, c := range pod.Spec.Containers {
+		id := findContainerIDByName(pod, c.Name)
+		cpuReq, ok := c.Resources.Requests[apis.ExtendResourceCPU]
+		if ok && !cpuReq.IsZero() {
+			cpuWeight := int64(milliCPUToWeight(cpuReq.Value()))
+			containerRes = append(containerRes, Resources{
+				CgroupSubSystem: cgroup.CgroupCpuSubsystem,
+				ContainerID:     id,
+				SubPath:         cgroup.CPUWeightFileV2,
+				Value:           cpuWeight,
+			})
+			cpuWeightTotal += cpuWeight
+		}
+
+		cpuLimits, ok := c.Resources.Limits[apis.ExtendResourceCPU]
+		if ok && !cpuLimits.IsZero() {
+			cpuMaxStr := milliCPUToMax(cpuLimits.Value(), quotaPeriod)
+			if cpuMaxStr == "max 100000" {
+				containerRes = append(containerRes, Resources{
+					CgroupSubSystem: cgroup.CgroupCpuSubsystem,
+					ContainerID:     id,
+					SubPath:         cgroup.CPUQuotaTotalFileV2,
+					Value:           -1,
+				})
+			} else {
+				var cpuQuota int64
+				_, err := fmt.Sscanf(cpuMaxStr, "%d %*d", &cpuQuota)
+				if err == nil {
+					containerRes = append(containerRes, Resources{
+						CgroupSubSystem: cgroup.CgroupCpuSubsystem,
+						ContainerID:     id,
+						SubPath:         cgroup.CPUQuotaTotalFileV2,
+						Value:           cpuQuota,
+					})
+					cpuMaxTotal += cpuQuota
+				}
+			}
+		} else {
+			cpuLimitsDeclared = false
+		}
+
+		memoryLimits, ok := c.Resources.Limits[apis.ExtendResourceMemory]
+		if ok && !memoryLimits.IsZero() {
+			memoryMaxStr := memoryLimitToMax(memoryLimits.Value())
+			if memoryMaxStr == "max" {
+				containerRes = append(containerRes, Resources{
+					CgroupSubSystem: cgroup.CgroupMemorySubsystem,
+					ContainerID:     id,
+					SubPath:         cgroup.MemoryMaxFileV2,
+					Value:           -1,
+				})
+			} else {
+				var memMax int64
+				_, err := fmt.Sscanf(memoryMaxStr, "%d", &memMax)
+				if err == nil {
+					containerRes = append(containerRes, Resources{
+						CgroupSubSystem: cgroup.CgroupMemorySubsystem,
+						ContainerID:     id,
+						SubPath:         cgroup.MemoryMaxFileV2,
+						Value:           memMax,
+					})
+					memoryMaxTotal += memMax
+				}
+			}
+		} else {
+			memoryLimitsDeclared = false
+		}
+	}
+	if cpuWeightTotal == 0 {
+		cpuWeightTotal = 100
+	}
+
+	containerRes = append(containerRes, Resources{
+		CgroupSubSystem: cgroup.CgroupCpuSubsystem,
+		SubPath:         cgroup.CPUWeightFileV2,
+		Value:           cpuWeightTotal,
+	})
+
+	if cpuLimitsDeclared {
+		if cpuMaxTotal == 0 {
+			containerRes = append(containerRes, Resources{
+				CgroupSubSystem: cgroup.CgroupCpuSubsystem,
+				SubPath:         cgroup.CPUQuotaTotalFileV2,
+				Value:           -1,
+			})
+		} else {
+			containerRes = append(containerRes, Resources{
+				CgroupSubSystem: cgroup.CgroupCpuSubsystem,
+				SubPath:         cgroup.CPUQuotaTotalFileV2,
+				Value:           cpuMaxTotal,
+			})
+		}
+	}
+
+	if memoryLimitsDeclared {
+		if memoryMaxTotal == 0 {
+			containerRes = append(containerRes, Resources{
+				CgroupSubSystem: cgroup.CgroupMemorySubsystem,
+				SubPath:         cgroup.MemoryMaxFileV2,
+				Value:           -1,
+			})
+		} else {
+			containerRes = append(containerRes, Resources{
+				CgroupSubSystem: cgroup.CgroupMemorySubsystem,
+				SubPath:         cgroup.MemoryMaxFileV2,
+				Value:           memoryMaxTotal,
+			})
+		}
+	}
+
+	return containerRes
+}
+
+func milliCPUToWeight(milliCPU int64) uint64 {
+	weight := uint64(milliCPU / 10)
+	if weight < 1 {
+		weight = 1
+	} else if weight > 100000 {
+		weight = 100000
+	}
+	return weight
+}
+
+func milliCPUToMax(milliCPU, period int64) string {
+	if milliCPU == 0 {
+		return "max 100000"
+	}
+	quota := (milliCPU * period) / 1000
+	if quota < 1000 {
+		quota = 1000
+	}
+	return fmt.Sprintf("%d %d", quota, period)
+}
+
+func memoryLimitToMax(memoryBytes int64) string {
+	if memoryBytes == 0 {
+		return "max"
+	}
+	return fmt.Sprintf("%d", memoryBytes)
+}
+
+func CalculateExtendResourceSystemd(pod *v1.Pod) []ResourcesSystemd {
+	var res []ResourcesSystemd
+	cpuWeightTotal := uint64(0)
+	memoryMaxTotal := int64(0)
+	cpuMaxTotal := int64(0)
+	cpuLimitsDeclared := true
+	memoryLimitsDeclared := true
+
+	for _, c := range pod.Spec.Containers {
+		id := findContainerIDByName(pod, c.Name)
+		// CPUWeight
+		cpuReq, ok := c.Resources.Requests[apis.ExtendResourceCPU]
+		if ok && !cpuReq.IsZero() {
+			cpuWeight := milliCPUToWeight(cpuReq.Value())
+			res = append(res, ResourcesSystemd{
+				ContainerID: id,
+				Property:    "CPUWeight",
+				Value:       fmt.Sprintf("%d", cpuWeight),
+			})
+			cpuWeightTotal += cpuWeight
+		}
+		// MemoryMax
+		memoryLimits, ok := c.Resources.Limits[apis.ExtendResourceMemory]
+		if ok && !memoryLimits.IsZero() {
+			memoryMaxStr := memoryLimitToMax(memoryLimits.Value())
+			res = append(res, ResourcesSystemd{
+				ContainerID: id,
+				Property:    "MemoryMax",
+				Value:       memoryMaxStr,
+			})
+			if memoryMaxStr != "max" {
+				var memMax int64
+				_, err := fmt.Sscanf(memoryMaxStr, "%d", &memMax)
+				if err == nil {
+					memoryMaxTotal += memMax
+				}
+			}
+		} else {
+			memoryLimitsDeclared = false
+		}
+		// CPUQuota
+		cpuLimits, ok := c.Resources.Limits[apis.ExtendResourceCPU]
+		if ok && !cpuLimits.IsZero() {
+			cpuMaxStr := milliCPUToMax(cpuLimits.Value(), quotaPeriod)
+			if cpuMaxStr == "max 100000" {
+				res = append(res, ResourcesSystemd{
+					ContainerID: id,
+					Property:    "CPUQuota",
+					Value:       "max",
+				})
+			} else {
+				var cpuQuota int64
+				_, err := fmt.Sscanf(cpuMaxStr, "%d %*d", &cpuQuota)
+				if err == nil {
+					res = append(res, ResourcesSystemd{
+						ContainerID: id,
+						Property:    "CPUQuota",
+						Value:       fmt.Sprintf("%d", cpuQuota),
+					})
+					cpuMaxTotal += cpuQuota
+				}
+			}
+		} else {
+			cpuLimitsDeclared = false
+		}
+	}
+	// Pod level
+	if cpuWeightTotal == 0 {
+		cpuWeightTotal = 100
+	}
+	res = append(res, ResourcesSystemd{
+		Property: "CPUWeight",
+		Value:    fmt.Sprintf("%d", cpuWeightTotal),
+	})
+	if cpuLimitsDeclared {
+		if cpuMaxTotal == 0 {
+			res = append(res, ResourcesSystemd{
+				Property: "CPUQuota",
+				Value:    "",
+			})
+		} else {
+			percent := float64(cpuMaxTotal) / float64(quotaPeriod) * 100
+			res = append(res, ResourcesSystemd{
+				Property: "CPUQuota",
+				Value:    fmt.Sprintf("%.2f%%", percent),
+			})
+		}
+	}
+	if memoryLimitsDeclared {
+		if memoryMaxTotal == 0 {
+			res = append(res, ResourcesSystemd{
+				Property: "MemoryMax",
+				Value:    "infinity",
+			})
+		} else {
+			res = append(res, ResourcesSystemd{
+				Property: "MemoryMax",
+				Value:    fmt.Sprintf("%d", memoryMaxTotal),
+			})
+		}
+	}
+	return res
 }

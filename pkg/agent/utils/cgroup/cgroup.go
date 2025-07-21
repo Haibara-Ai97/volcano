@@ -66,6 +66,7 @@ const (
 	MemoryHighFileV2  string = "memory.high"
 	MemoryLowFileV2   string = "memory.low"
 	MemoryMinFileV2   string = "memory.min"
+	MemoryMaxFileV2   string = "memory.max"
 
 	// Cgroup version constants
 	CgroupV1 string = "v1"

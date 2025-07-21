@@ -2,7 +2,7 @@ package systemdhandler
 
 import (
 	"fmt"
-	"github.com/godbus/dbus/v5"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"volcano.sh/volcano/pkg/agent/resourcemanager/utils"
@@ -29,36 +29,26 @@ func (s *SystemdHandler) setMemoryQoSViaDBus(serviceName string, qosLevel int64)
 	memoryLow := utils.CalculateMemoryLowFromQoSLevel(qosLevel)
 	memoryMin := utils.CalculateMemoryMinFromQoSLevel(qosLevel)
 
-	// 创建DBus对象
-	obj := s.conn.Object("org.freedesktop.systemd1", dbus.ObjectPath("/org/freedesktop/systemd1"))
-
-	// 构建属性数组
 	var properties []interface{}
 
 	// 设置MemoryHigh (软限制)
 	if memoryHigh > 0 {
-		properties = append(properties, "MemoryHigh", dbus.MakeVariant(memoryHigh))
+		properties = append(properties, "MemoryHigh", memoryHigh)
 	} else {
-		// 无限制时设置为uint64最大值
-		properties = append(properties, "MemoryHigh", dbus.MakeVariant(uint64(18446744073709551615)))
+		properties = append(properties, "MemoryHigh", uint64(18446744073709551615))
 	}
 
-	// 设置MemoryLow (最小保证)
 	if memoryLow > 0 {
-		properties = append(properties, "MemoryLow", dbus.MakeVariant(memoryLow))
+		properties = append(properties, "MemoryLow", memoryLow)
 	}
 
-	// 设置MemoryMin (最小预留)
 	if memoryMin > 0 {
-		properties = append(properties, "MemoryMin", dbus.MakeVariant(memoryMin))
+		properties = append(properties, "MemoryMin", memoryMin)
 	}
 
-	// 调用DBus方法
-	call := obj.Call("org.freedesktop.systemd1.Manager.SetUnitProperties", 0,
-		serviceName, false, properties)
-
-	if call.Err != nil {
-		return fmt.Errorf("failed to set memory QoS via D-Bus: %v", call.Err)
+	err := s.sendDBusToSystemd(serviceName, properties)
+	if err != nil {
+		return fmt.Errorf("failed to set memory QoS via D-Bus: %v", err)
 	}
 
 	return nil
