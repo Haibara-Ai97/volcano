@@ -59,22 +59,7 @@ func (h *CPUQoSHandle) Handle(event interface{}) error {
 		return fmt.Errorf("illegal pod event")
 	}
 
-	//cgroupPath, err := h.cgroupMgr.GetPodCgroupPath(podEvent.QoSClass, cgroup.CgroupCpuSubsystem, podEvent.UID)
-	//if err != nil {
-	//	return fmt.Errorf("failed to get pod cgroup file(%s), error: %v", podEvent.UID, err)
-	//}
-	//qosLevelFile := path.Join(cgroupPath, cgroup.CPUQoSLevelFile)
-	//qosLevel := []byte(fmt.Sprintf("%d", podEvent.QoSLevel))
-	//
-	//err = utils.UpdatePodCgroup(qosLevelFile, qosLevel)
-	//if err != nil {
-	//	if errors.Is(err, os.ErrNotExist) {
-	//		klog.InfoS("Cgroup file not existed", "cgroupFile", qosLevelFile)
-	//		return nil
-	//	}
-	//	return err
-	//}
-
+	// Set CPU QoS Level
 	ctx := context.Background()
 	err := h.resourceHandler.SetCPUQoSLevel(ctx, podEvent.UID, podEvent.QoSClass, podEvent.QoSLevel)
 	if err != nil {

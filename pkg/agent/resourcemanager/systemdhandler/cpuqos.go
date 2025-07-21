@@ -1,44 +1,17 @@
-package systemdresourcehandler
+package systemdhandler
 
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	"github.com/godbus/dbus/v5"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"strings"
 	"volcano.sh/volcano/pkg/agent/resourcemanager/utils"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 )
 
-type SystemdResourceHandler struct {
-	conn          *dbus.Conn
-	cgroupManager cgroup.CgroupManager
-	cgroupVersion string
-}
-
-func NewSystemdResourceHandler(cgroupMgr cgroup.CgroupManager, cgroupVersion string) *SystemdResourceHandler {
-	// Initialize D-Bus connection
-	conn, err := dbus.ConnectSystemBus()
-	if err != nil {
-		// Log the error but don't fail initialization - the handler can still work for cgroupfs operations
-		// D-Bus operations will fail gracefully if needed
-		return &SystemdResourceHandler{
-			cgroupManager: cgroupMgr,
-			cgroupVersion: cgroupVersion,
-			conn:          nil, // Will be nil if connection failed
-		}
-	}
-
-	return &SystemdResourceHandler{
-		cgroupManager: cgroupMgr,
-		cgroupVersion: cgroupVersion,
-		conn:          conn,
-	}
-}
-
-func (srh *SystemdResourceHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
+func (srh *SystemdHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
 	serviceName := srh.getServiceName(podUID, qosClass)
 	if serviceName == "" {
 		return fmt.Errorf("failed to get service name for pod %s", podUID)
@@ -47,7 +20,7 @@ func (srh *SystemdResourceHandler) SetCPUQoSLevel(ctx context.Context, podUID ty
 	return srh.setQoSLevelViaDBus(serviceName, qosLevel)
 }
 
-func (srh *SystemdResourceHandler) getServiceName(podUID types.UID, qosClass corev1.PodQOSClass) string {
+func (srh *SystemdHandler) getServiceName(podUID types.UID, qosClass corev1.PodQOSClass) string {
 	cgroupPath, err := srh.cgroupManager.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
 	if err != nil {
 		return ""
@@ -68,7 +41,7 @@ func (srh *SystemdResourceHandler) getServiceName(podUID types.UID, qosClass cor
 }
 
 // validateServiceExists checks if the service/slice exists in systemd
-func (srh *SystemdResourceHandler) validateServiceExists(serviceName string) bool {
+func (srh *SystemdHandler) validateServiceExists(serviceName string) bool {
 	if srh.conn == nil {
 		// If D-Bus connection is not available, we can't validate
 		// Return true to allow the operation to proceed
@@ -76,19 +49,19 @@ func (srh *SystemdResourceHandler) validateServiceExists(serviceName string) boo
 	}
 
 	obj := srh.conn.Object("org.freedesktop.systemd1", dbus.ObjectPath("/org/freedesktop/systemd1"))
-	
+
 	// Try to get unit properties to check if the unit exists
 	call := obj.Call("org.freedesktop.systemd1.Manager.GetUnit", 0, serviceName)
 	if call.Err != nil {
 		// Unit doesn't exist or other error
 		return false
 	}
-	
+
 	// If we get here, the unit exists
 	return true
 }
 
-func (srh *SystemdResourceHandler) setQoSLevelViaDBus(serviceName string, qosLevel int64) error {
+func (srh *SystemdHandler) setQoSLevelViaDBus(serviceName string, qosLevel int64) error {
 	if srh.conn == nil {
 		return fmt.Errorf("D-Bus connection not available, cannot set QoS level via systemd")
 	}
@@ -107,7 +80,7 @@ func (srh *SystemdResourceHandler) setQoSLevelViaDBus(serviceName string, qosLev
 	call := obj.Call("org.freedesktop.systemd1.Manager.SetUnitProperties", 0,
 		serviceName, false, properties)
 	if call.Err != nil {
-		return fmt.Errorf("Failed to set CPUWeight via D-Bus: %v", call.Err)
+		return fmt.Errorf("failed to set CPUWeight via D-Bus: %v", call.Err)
 	}
 
 	return nil

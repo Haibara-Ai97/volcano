@@ -1,8 +1,8 @@
 package resourcemanager
 
 import (
-	"volcano.sh/volcano/pkg/agent/resourcemanager/cgroupresourcehandler"
-	"volcano.sh/volcano/pkg/agent/resourcemanager/systemdresourcehandler"
+	"volcano.sh/volcano/pkg/agent/resourcemanager/cgrouphandler"
+	"volcano.sh/volcano/pkg/agent/resourcemanager/systemdhandler"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 )
 
@@ -21,9 +21,9 @@ func NewResourceManagerFactory(cgroupMgr cgroup.CgroupManager, cgroupVersion str
 func (rhf *ResourceHandlerFactory) CreateResourceHandler(cgroupDriver string) ResourceHandler {
 	switch cgroupDriver {
 	case "cgroupfs":
-		return cgroupresourcehandler.NewCgroupResourceHandler(rhf.cgroupManager, rhf.cgroupVersion)
+		return cgrouphandler.NewCgroupHandler(rhf.cgroupManager, rhf.cgroupVersion)
 	case "systemd":
-		return systemdresourcehandler.NewSystemdResourceHandler(rhf.cgroupManager, rhf.cgroupVersion)
+		return systemdhandler.NewSystemdHandler(rhf.cgroupManager, rhf.cgroupVersion)
 	}
 	return nil
 }

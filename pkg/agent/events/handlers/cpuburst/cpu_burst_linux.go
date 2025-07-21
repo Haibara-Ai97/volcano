@@ -17,11 +17,7 @@ limitations under the License.
 package cpuburst
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -33,9 +29,7 @@ import (
 	"volcano.sh/volcano/pkg/agent/events/handlers/base"
 	"volcano.sh/volcano/pkg/agent/features"
 	"volcano.sh/volcano/pkg/agent/resourcemanager"
-	"volcano.sh/volcano/pkg/agent/utils"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
-	"volcano.sh/volcano/pkg/agent/utils/file"
 	"volcano.sh/volcano/pkg/config"
 	"volcano.sh/volcano/pkg/metriccollect"
 )
@@ -46,18 +40,21 @@ func init() {
 
 type CPUBurstHandle struct {
 	*base.BaseHandle
-	cgroupMgr   cgroup.CgroupManager
-	podInformer v1.PodInformer
+	cgroupMgr       cgroup.CgroupManager
+	podInformer     v1.PodInformer
+	resourceHandler resourcemanager.ResourceHandler
 }
 
 func NewCPUBurst(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
+	handler := resourceMgr.Handler
 	return &CPUBurstHandle{
 		BaseHandle: &base.BaseHandle{
 			Name:   string(features.CPUBurstFeature),
 			Config: config,
 		},
-		cgroupMgr:   cgroupMgr,
-		podInformer: config.InformerFactory.K8SInformerFactory.Core().V1().Pods(),
+		cgroupMgr:       cgroupMgr,
+		podInformer:     config.InformerFactory.K8SInformerFactory.Core().V1().Pods(),
+		resourceHandler: handler,
 	}
 }
 
@@ -66,6 +63,8 @@ func (c *CPUBurstHandle) Handle(event interface{}) error {
 	if !ok {
 		return fmt.Errorf("illegal pod event")
 	}
+
+	// Get latest pod information from informer
 	pod := podEvent.Pod
 	latestPod, err := c.podInformer.Lister().Pods(pod.Namespace).Get(pod.Name)
 	if err != nil {
@@ -82,100 +81,10 @@ func (c *CPUBurstHandle) Handle(event interface{}) error {
 		return nil
 	}
 
-	cgroupPath, err := c.cgroupMgr.GetPodCgroupPath(podEvent.QoSClass, cgroup.CgroupCpuSubsystem, podEvent.UID)
-	if err != nil {
-		return fmt.Errorf("failed to get pod cgroup file(%s), error: %v", podEvent.UID, err)
-	}
-
 	quotaBurstTime := getCPUBurstTime(pod)
-	podBurstTime := int64(0)
-	err = filepath.WalkDir(cgroupPath, walkFunc(cgroupPath, quotaBurstTime, &podBurstTime, c.cgroupMgr.GetCgroupVersion()))
-	if err != nil {
-		return fmt.Errorf("failed to set container cpu quota burst time, err: %v", err)
-	}
 
-	// last set pod cgroup cpu quota burst.
-	cgroupVersion := c.cgroupMgr.GetCgroupVersion()
-	var podQuotaTotalFile, podQuotaBurstFile string
-	if cgroupVersion == cgroup.CgroupV2 {
-		podQuotaTotalFile = filepath.Join(cgroupPath, cgroup.CPUQuotaTotalFileV2)
-		podQuotaBurstFile = filepath.Join(cgroupPath, cgroup.CPUQuotaBurstFileV2)
-	} else {
-		podQuotaTotalFile = filepath.Join(cgroupPath, cgroup.CPUQuotaTotalFile)
-		podQuotaBurstFile = filepath.Join(cgroupPath, cgroup.CPUQuotaBurstFile)
-	}
-	
-	value, err := file.ReadIntFromFile(podQuotaTotalFile)
-	if err != nil {
-		return fmt.Errorf("failed to get pod cpu total quota time, err: %v,path: %s", err, podQuotaTotalFile)
-	}
-	if value == fixedQuotaValue {
-		return nil
-	}
-	err = utils.UpdateFile(podQuotaBurstFile, []byte(strconv.FormatInt(podBurstTime, 10)))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			klog.ErrorS(nil, "CPU Burst is not supported", "cgroupFile", podQuotaBurstFile)
-			return nil
-		}
-		return err
-	}
-
-	klog.InfoS("Successfully set pod cpu quota burst time", "path", podQuotaBurstFile, "quotaBurst", podBurstTime, "pod", klog.KObj(pod))
-	return nil
-}
-
-func walkFunc(cgroupPath string, quotaBurstTime int64, podBurstTime *int64, cgroupVersion string) fs.WalkDirFunc {
-	return func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		// We will set pod cgroup later.
-		if path == cgroupPath {
-			return nil
-		}
-		if d == nil || !d.IsDir() {
-			return nil
-		}
-		
-		var quotaTotalFile, quotaBurstFile string
-		if cgroupVersion == cgroup.CgroupV2 {
-			quotaTotalFile = filepath.Join(path, cgroup.CPUQuotaTotalFileV2)
-			quotaBurstFile = filepath.Join(path, cgroup.CPUQuotaBurstFileV2)
-		} else {
-			quotaTotalFile = filepath.Join(path, cgroup.CPUQuotaTotalFile)
-			quotaBurstFile = filepath.Join(path, cgroup.CPUQuotaBurstFile)
-		}
-		
-		quotaTotal, err := file.ReadIntFromFile(quotaTotalFile)
-		if err != nil {
-			return fmt.Errorf("failed to get container cpu total quota time, err: %v, path: %s", err, quotaTotalFile)
-		}
-		if quotaTotal == fixedQuotaValue {
-			return nil
-		}
-
-		actualBurst := quotaBurstTime
-		if quotaBurstTime > quotaTotal {
-			klog.ErrorS(nil, "The quota burst time is greater than quota total, use quota total as burst time", "quotaBurst", quotaBurstTime, "quoTotal", quotaTotal)
-			actualBurst = quotaTotal
-		}
-		if quotaBurstTime == 0 {
-			actualBurst = quotaTotal
-		}
-		*podBurstTime += actualBurst
-		err = utils.UpdateFile(quotaBurstFile, []byte(strconv.FormatInt(actualBurst, 10)))
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				klog.ErrorS(nil, "CPU Burst is not supported", "cgroupFile", quotaBurstFile)
-				return nil
-			}
-			return err
-		}
-
-		klog.InfoS("Successfully set container cpu burst time", "path", quotaBurstFile, "quotaTotal", quotaTotal, "quotaBurst", actualBurst)
-		return nil
-	}
+	// Set CPU burst
+	return c.resourceHandler.SetCPUBurst(podEvent.QoSClass, podEvent.UID, quotaBurstTime, pod)
 }
 
 func getCPUBurstTime(pod *corev1.Pod) int64 {

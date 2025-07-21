@@ -5,7 +5,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sync"
-	_ "volcano.sh/volcano/pkg/agent/resourcemanager/cgroupresourcehandler"
+	_ "volcano.sh/volcano/pkg/agent/resourcemanager/cgrouphandler"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 )
 
@@ -21,6 +21,7 @@ type ResourceManager struct {
 // ResourceHandler 资源处理器接口
 type ResourceHandler interface {
 	SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error
+	SetCPUBurst(qosClass corev1.PodQOSClass, podUID types.UID, quotaBurstTime int64, pod *corev1.Pod) error
 }
 
 func NewResourceManager(cgroupVersion, cgroupDriver string, cgroupManger cgroup.CgroupManager) *ResourceManager {
