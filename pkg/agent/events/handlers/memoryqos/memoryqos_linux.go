@@ -17,20 +17,16 @@ limitations under the License.
 package memoryqos
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path"
+
 	"volcano.sh/volcano/pkg/agent/resourcemanager"
 
 	"k8s.io/klog/v2"
 
-	"volcano.sh/volcano/pkg/agent/apis/extension"
 	"volcano.sh/volcano/pkg/agent/events/framework"
 	"volcano.sh/volcano/pkg/agent/events/handlers"
 	"volcano.sh/volcano/pkg/agent/events/handlers/base"
 	"volcano.sh/volcano/pkg/agent/features"
-	"volcano.sh/volcano/pkg/agent/utils"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 	"volcano.sh/volcano/pkg/config"
 	"volcano.sh/volcano/pkg/metriccollect"
@@ -42,7 +38,8 @@ func init() {
 
 type MemoryQoSHandle struct {
 	*base.BaseHandle
-	cgroupMgr cgroup.CgroupManager
+	resourceHandler resourcemanager.ResourceHandler
+	cgroupMgr       cgroup.CgroupManager
 }
 
 func NewMemoryQoSHandle(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
@@ -51,7 +48,8 @@ func NewMemoryQoSHandle(config *config.Configuration, mgr *metriccollect.MetricC
 			Name:   string(features.MemoryQoSFeature),
 			Config: config,
 		},
-		cgroupMgr: cgroupMgr,
+		cgroupMgr:       cgroupMgr,
+		resourceHandler: resourceMgr.Handler,
 	}
 }
 
@@ -61,22 +59,11 @@ func (h *MemoryQoSHandle) Handle(event interface{}) error {
 		return fmt.Errorf("illegal pod event")
 	}
 
-	cgroupPath, err := h.cgroupMgr.GetPodCgroupPath(podEvent.QoSClass, cgroup.CgroupMemorySubsystem, podEvent.UID)
+	// Set Memory QoS Level
+	err := h.resourceHandler.SetMemoryQoS(podEvent.UID, podEvent.QoSClass, podEvent.QoSLevel)
 	if err != nil {
-		return fmt.Errorf("failed to get pod cgroup file(%s), error: %v", podEvent.UID, err)
-	}
-	qosLevelFile := path.Join(cgroupPath, cgroup.MemoryQoSLevelFile)
-	qosLevel := []byte(fmt.Sprintf("%d", extension.NormalizeQosLevel(podEvent.QoSLevel)))
-
-	err = utils.UpdatePodCgroup(qosLevelFile, qosLevel)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			klog.InfoS("Cgroup file not existed", "cgroupFile", qosLevelFile)
-			return nil
-		}
 		return err
 	}
-
-	klog.InfoS("Successfully set memory qos level to cgroup file", "qosLevel", qosLevel, "cgroupFile", qosLevelFile)
+	klog.InfoS("Successfully set memory qos level to cgroup file", "qosLevel", podEvent.QoSLevel)
 	return nil
 }

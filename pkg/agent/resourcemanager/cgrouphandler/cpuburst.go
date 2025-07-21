@@ -15,19 +15,19 @@ import (
 	"volcano.sh/volcano/pkg/agent/utils/file"
 )
 
-func (crh *CgroupHandler) SetCPUBurst(qosClass corev1.PodQOSClass, podUID types.UID, quotaBurstTime int64, pod *corev1.Pod) error {
-	cgroupPath, err := crh.cgroupMgr.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
+func (c *CgroupHandler) SetCPUBurst(qosClass corev1.PodQOSClass, podUID types.UID, quotaBurstTime int64, pod *corev1.Pod) error {
+	cgroupPath, err := c.cgroupMgr.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
 	if err != nil {
 		return fmt.Errorf("failed to get pod cgroup file(%s), error: %v", podUID, err)
 	}
 
 	podBurstTime := int64(0)
-	err = filepath.WalkDir(cgroupPath, walkFunc(cgroupPath, quotaBurstTime, &podBurstTime, crh.cgroupVersion))
+	err = filepath.WalkDir(cgroupPath, walkFunc(cgroupPath, quotaBurstTime, &podBurstTime, c.cgroupVersion))
 	if err != nil {
 		return fmt.Errorf("failed to set container cpu quota burst time, err: %v", err)
 	}
 
-	cgroupVersion := crh.cgroupMgr.GetCgroupVersion()
+	cgroupVersion := c.cgroupMgr.GetCgroupVersion()
 	var podQuotaTotalFile, podQuotaBurstFile string
 	if cgroupVersion == cgroup.CgroupV2 {
 		podQuotaTotalFile = filepath.Join(cgroupPath, cgroup.CPUQuotaTotalFileV2)

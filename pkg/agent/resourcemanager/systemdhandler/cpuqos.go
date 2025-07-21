@@ -11,17 +11,17 @@ import (
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 )
 
-func (srh *SystemdHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
-	serviceName := srh.getServiceName(podUID, qosClass)
+func (s *SystemdHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
+	serviceName := s.getServiceName(podUID, qosClass)
 	if serviceName == "" {
 		return fmt.Errorf("failed to get service name for pod %s", podUID)
 	}
 
-	return srh.setQoSLevelViaDBus(serviceName, qosLevel)
+	return s.setQoSLevelViaDBus(serviceName, qosLevel)
 }
 
-func (srh *SystemdHandler) getServiceName(podUID types.UID, qosClass corev1.PodQOSClass) string {
-	cgroupPath, err := srh.cgroupManager.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
+func (s *SystemdHandler) getServiceName(podUID types.UID, qosClass corev1.PodQOSClass) string {
+	cgroupPath, err := s.cgroupManager.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
 	if err != nil {
 		return ""
 	}
@@ -31,7 +31,7 @@ func (srh *SystemdHandler) getServiceName(podUID types.UID, qosClass corev1.PodQ
 		// In systemd-managed cgroups (both v1 and v2), we look for .slice suffix
 		if strings.HasSuffix(part, ".slice") {
 			// Validate that this service/slice actually exists in systemd
-			if srh.validateServiceExists(part) {
+			if s.validateServiceExists(part) {
 				return part
 			}
 		}
@@ -41,14 +41,14 @@ func (srh *SystemdHandler) getServiceName(podUID types.UID, qosClass corev1.PodQ
 }
 
 // validateServiceExists checks if the service/slice exists in systemd
-func (srh *SystemdHandler) validateServiceExists(serviceName string) bool {
-	if srh.conn == nil {
+func (s *SystemdHandler) validateServiceExists(serviceName string) bool {
+	if s.conn == nil {
 		// If D-Bus connection is not available, we can't validate
 		// Return true to allow the operation to proceed
 		return true
 	}
 
-	obj := srh.conn.Object("org.freedesktop.systemd1", dbus.ObjectPath("/org/freedesktop/systemd1"))
+	obj := s.conn.Object("org.freedesktop.systemd1", dbus.ObjectPath("/org/freedesktop/systemd1"))
 
 	// Try to get unit properties to check if the unit exists
 	call := obj.Call("org.freedesktop.systemd1.Manager.GetUnit", 0, serviceName)
@@ -61,8 +61,8 @@ func (srh *SystemdHandler) validateServiceExists(serviceName string) bool {
 	return true
 }
 
-func (srh *SystemdHandler) setQoSLevelViaDBus(serviceName string, qosLevel int64) error {
-	if srh.conn == nil {
+func (s *SystemdHandler) setQoSLevelViaDBus(serviceName string, qosLevel int64) error {
+	if s.conn == nil {
 		return fmt.Errorf("D-Bus connection not available, cannot set QoS level via systemd")
 	}
 
@@ -70,7 +70,7 @@ func (srh *SystemdHandler) setQoSLevelViaDBus(serviceName string, qosLevel int64
 
 	// Use Manager.SetUnitProperties method to set CPUWeight
 	// Format: SetUnitProperties(unit_name, runtime, properties)
-	obj := srh.conn.Object("org.freedesktop.systemd1", dbus.ObjectPath("/org/freedesktop/systemd1"))
+	obj := s.conn.Object("org.freedesktop.systemd1", dbus.ObjectPath("/org/freedesktop/systemd1"))
 
 	// Create properties array: [("CPUWeight", variant(500))]
 	properties := []interface{}{

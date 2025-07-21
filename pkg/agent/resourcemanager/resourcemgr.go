@@ -22,6 +22,7 @@ type ResourceManager struct {
 type ResourceHandler interface {
 	SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error
 	SetCPUBurst(qosClass corev1.PodQOSClass, podUID types.UID, quotaBurstTime int64, pod *corev1.Pod) error
+	SetMemoryQoS(podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error
 }
 
 func NewResourceManager(cgroupVersion, cgroupDriver string, cgroupManger cgroup.CgroupManager) *ResourceManager {

@@ -14,12 +14,12 @@ import (
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 )
 
-func (crh *CgroupHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
-	cgroupPath, err := crh.cgroupMgr.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
+func (c *CgroupHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
+	cgroupPath, err := c.cgroupMgr.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
 	if err != nil {
 		return fmt.Errorf("failed to get pod cgroup file(%s), error: %v", podUID, err)
 	}
-	switch crh.cgroupVersion {
+	switch c.cgroupVersion {
 	case "cgroupv1":
 		qosLevelFile := path.Join(cgroupPath, cgroup.CPUQoSLevelFile)
 		qosLevelByte := []byte(fmt.Sprintf("%d", qosLevel))
@@ -34,13 +34,13 @@ func (crh *CgroupHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, 
 		}
 		return nil
 	case "cgroupv2":
-		return crh.setCPUWeightAndQuota(cgroupPath, qosLevel)
+		return c.setCPUWeightAndQuota(cgroupPath, qosLevel)
 	default:
-		return fmt.Errorf("invalid cgroup version: %s", crh.cgroupVersion)
+		return fmt.Errorf("invalid cgroup version: %s", c.cgroupVersion)
 	}
 }
 
-func (crh *CgroupHandler) setCPUWeightAndQuota(cgroupPath string, qosLevel int64) error {
+func (c *CgroupHandler) setCPUWeightAndQuota(cgroupPath string, qosLevel int64) error {
 	cpuWeight := calutils.CalculateCPUWeightFromQoSLevel(qosLevel)
 
 	cpuWeightFile := path.Join(cgroupPath, cgroup.CPUWeightFileV2)

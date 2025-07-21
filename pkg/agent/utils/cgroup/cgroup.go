@@ -62,13 +62,10 @@ const (
 	CPUQuotaBurstFileV2 string = "cpu.max.burst"
 	CPUQuotaTotalFileV2 string = "cpu.max"
 
-	MemoryUsageFileV2    string = "memory.stat"
-	MemoryQoSLevelFileV2 string = "memory.qos_level"
-	MemoryLimitFileV2    string = "memory.max"
-
-	NetCLSFileNameV2 string = "net_cls.classid"
-
-	CPUShareFileNameV2 string = "cpu.weight"
+	MemoryUsageFileV2 string = "memory.stat"
+	MemoryHighFileV2  string = "memory.high"
+	MemoryLowFileV2   string = "memory.low"
+	MemoryMinFileV2   string = "memory.min"
 
 	// Cgroup version constants
 	CgroupV1 string = "v1"
