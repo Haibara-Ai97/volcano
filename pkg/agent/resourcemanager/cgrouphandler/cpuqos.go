@@ -41,32 +41,47 @@ func (c *CgroupHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qo
 }
 
 func (c *CgroupHandler) setCPUWeightAndQuota(cgroupPath string, qosLevel int64) error {
-	cpuWeight := calutils.CalculateCPUWeightFromQoSLevel(qosLevel)
+	if qosLevel == -1 {
+		cpuIdleFile := path.Join(cgroupPath, cgroup.CPUIdleFileV2)
+		cpuIdleByte := []byte(fmt.Sprint("1"))
 
-	cpuWeightFile := path.Join(cgroupPath, cgroup.CPUWeightFileV2)
-	cpuWeightByte := []byte(fmt.Sprintf("%d", cpuWeight))
-
-	err := utils.UpdatePodCgroup(cpuWeightFile, cpuWeightByte)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			klog.InfoS("Cgroup cpu weight file not exist", "cgroupFile", cpuWeightFile)
-		} else {
-			return err
-		}
-	}
-
-	if cpuQuota := calutils.CalculateCPUQuotaFromQoSLevel(qosLevel); cpuQuota > 0 {
-		cpuMaxFile := path.Join(cgroupPath, cgroup.CPUQuotaTotalFileV2)
-		cpuMaxByte := []byte(fmt.Sprintf("%d", cpuQuota))
-
-		err = utils.UpdatePodCgroup(cpuMaxFile, cpuMaxByte)
+		err := utils.UpdatePodCgroup(cpuIdleFile, cpuIdleByte)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				klog.InfoS("Cgroup cpu quota file not exist", "cgroupFile", cpuMaxFile)
+				klog.InfoS("Cgroup cpu idle file not exist", "cgroupFile", cpuIdleFile)
 			} else {
 				return err
 			}
 		}
+	} else {
+		cpuWeight := calutils.CalculateCPUWeightFromQoSLevel(qosLevel)
+
+		cpuWeightFile := path.Join(cgroupPath, cgroup.CPUWeightFileV2)
+		cpuWeightByte := []byte(fmt.Sprintf("%d", cpuWeight))
+
+		err := utils.UpdatePodCgroup(cpuWeightFile, cpuWeightByte)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				klog.InfoS("Cgroup cpu weight file not exist", "cgroupFile", cpuWeightFile)
+			} else {
+				return err
+			}
+		}
+
+		if cpuQuota := calutils.CalculateCPUQuotaFromQoSLevel(qosLevel); cpuQuota > 0 {
+			cpuMaxFile := path.Join(cgroupPath, cgroup.CPUQuotaTotalFileV2)
+			cpuMaxByte := []byte(fmt.Sprintf("%d", cpuQuota))
+
+			err = utils.UpdatePodCgroup(cpuMaxFile, cpuMaxByte)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					klog.InfoS("Cgroup cpu quota file not exist", "cgroupFile", cpuMaxFile)
+				} else {
+					return err
+				}
+			}
+		}
 	}
+
 	return nil
 }

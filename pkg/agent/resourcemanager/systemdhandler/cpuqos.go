@@ -22,12 +22,19 @@ func (s *SystemdHandler) setQoSLevelViaDBus(serviceName string, qosLevel int64) 
 	if s.conn == nil {
 		return fmt.Errorf("D-Bus connection not available, cannot set QoS level via systemd")
 	}
+	
+	var cpuWeightStr string
 
-	cpuWeight := utils.CalculateCPUWeightFromQoSLevel(qosLevel)
+	if qosLevel == -1 {
+		cpuWeightStr = "idle"
+	} else {
+		cpuWeight := utils.CalculateCPUWeightFromQoSLevel(qosLevel)
+		cpuWeightStr = fmt.Sprintf("%d", cpuWeight)
+	}
 
 	// Create properties array: ["CPUWeight", dbus.MakeVariant(cpuWeight)]
 	properties := []interface{}{
-		"CPUWeight", cpuWeight,
+		"CPUWeight", cpuWeightStr,
 	}
 
 	err := s.sendDBusToSystemd(serviceName, properties)

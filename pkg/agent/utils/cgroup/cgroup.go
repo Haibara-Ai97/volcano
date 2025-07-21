@@ -61,6 +61,7 @@ const (
 
 	CPUQuotaBurstFileV2 string = "cpu.max.burst"
 	CPUQuotaTotalFileV2 string = "cpu.max"
+	CPUIdleFileV2       string = "cpu.idle"
 
 	MemoryUsageFileV2 string = "memory.stat"
 	MemoryHighFileV2  string = "memory.high"

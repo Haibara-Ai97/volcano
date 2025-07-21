@@ -9,8 +9,6 @@ func CalculateCPUWeightFromQoSLevel(qosLevel int64) uint64 {
 		return 500
 	case 0:
 		return 100
-	case -1:
-		return 50
 	default:
 		return 100
 	}
@@ -24,8 +22,6 @@ func CalculateCPUQuotaFromQoSLevel(qosLevel int64) uint64 {
 		return 0
 	case 0:
 		return 0
-	case -1:
-		return 50000
 	default:
 		return 0
 	}
