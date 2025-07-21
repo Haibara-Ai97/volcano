@@ -18,21 +18,13 @@ package resources
 
 import (
 	"fmt"
-	"os"
-	"path"
-	"strconv"
 	"volcano.sh/volcano/pkg/agent/resourcemanager"
-
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/klog/v2"
 
 	"volcano.sh/volcano/pkg/agent/events/framework"
 	"volcano.sh/volcano/pkg/agent/events/handlers"
 	"volcano.sh/volcano/pkg/agent/events/handlers/base"
 	"volcano.sh/volcano/pkg/agent/features"
-	"volcano.sh/volcano/pkg/agent/utils"
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
-	utilpod "volcano.sh/volcano/pkg/agent/utils/pod"
 	"volcano.sh/volcano/pkg/config"
 	"volcano.sh/volcano/pkg/metriccollect"
 )
@@ -43,7 +35,8 @@ func init() {
 
 type ResourcesHandle struct {
 	*base.BaseHandle
-	cgroupMgr cgroup.CgroupManager
+	resourceHandler resourcemanager.ResourceHandler
+	cgroupMgr       cgroup.CgroupManager
 }
 
 func NewResources(config *config.Configuration, mgr *metriccollect.MetricCollectorManager, cgroupMgr cgroup.CgroupManager, resourceMgr *resourcemanager.ResourceManager) framework.Handle {
@@ -53,7 +46,8 @@ func NewResources(config *config.Configuration, mgr *metriccollect.MetricCollect
 			Config: config,
 			Active: true,
 		},
-		cgroupMgr: cgroupMgr,
+		cgroupMgr:       cgroupMgr,
+		resourceHandler: resourceMgr.Handler,
 	}
 }
 
@@ -67,31 +61,7 @@ func (r *ResourcesHandle) Handle(event interface{}) error {
 		return nil
 	}
 
-	resources := utilpod.CalculateExtendResources(podEvent.Pod)
-	var errs []error
-	// set container and pod level cgroup.
-	for _, cr := range resources {
-		cgroupPath, err := r.cgroupMgr.GetPodCgroupPath(podEvent.QoSClass, cr.CgroupSubSystem, podEvent.UID)
-		if err != nil {
-			klog.ErrorS(err, "Failed to get pod cgroup", "pod", klog.KObj(podEvent.Pod), "subSystem", cr.CgroupSubSystem)
-			errs = append(errs, err)
-		}
-
-		filePath := path.Join(cgroupPath, cr.ContainerID, cr.SubPath)
-		err = utils.UpdateFile(filePath, []byte(strconv.FormatInt(cr.Value, 10)))
-		if os.IsNotExist(err) {
-			klog.InfoS("Cgroup file not existed", "filePath", filePath)
-			continue
-		}
-
-		if err != nil {
-			errs = append(errs, err)
-			klog.ErrorS(err, "Failed to set cgroup", "path", filePath, "pod", klog.KObj(podEvent.Pod))
-			continue
-		}
-		klog.InfoS("Successfully set cpu and memory cgroup", "path", filePath, "pod", klog.KObj(podEvent.Pod))
-	}
-	return utilerrors.NewAggregate(errs)
+	return r.resourceHandler.SetResourceLimit(podEvent)
 }
 
 // allowedUseExtRes defines what qos levels can use extension resources,
