@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -151,8 +152,29 @@ func GetCgroupDriver() string {
 	return CgroupDriverCgroupfs
 }
 
-// readKubeletCgroupDriver reads cgroup driver from kubelet config file
+// readKubeletCgroupDriver reads cgroup driver from kubelet config file or process command line arguments
 func readKubeletCgroupDriver() string {
+	// First, try to read from kubelet config files (original method)
+	driver := getCgroupDriverFromKubeletConfig()
+	if driver != "" {
+		return driver
+	}
+
+	// If config files don't exist or don't contain cgroup driver info, try process-based method
+	klog.V(4).Infof("Config files not found or don't contain cgroup driver, trying process-based method")
+
+	driver = getCgroupDriverFromKubeletProcess()
+	if driver != "" {
+		klog.V(4).Infof("Found cgroup driver from kubelet process: %s", driver)
+		return driver
+	}
+
+	return ""
+}
+
+// getCgroupDriverFromKubeletConfig gets cgroup driver by reading kubelet config files
+// This function is separated for easier unit testing
+func getCgroupDriverFromKubeletConfig() string {
 	// Common kubelet config file paths
 	configPaths := []string{
 		"/var/lib/kubelet/config.yaml",
@@ -162,11 +184,33 @@ func readKubeletCgroupDriver() string {
 
 	for _, configPath := range configPaths {
 		if driver := parseKubeletConfig(configPath); driver != "" {
+			klog.V(4).Infof("Found cgroup driver from config file %s: %s", configPath, driver)
 			return driver
 		}
 	}
 
 	return ""
+}
+
+// getCgroupDriverFromKubeletProcess gets cgroup driver by finding kubelet process and parsing its command line arguments
+// This function is separated for easier unit testing
+func getCgroupDriverFromKubeletProcess() string {
+	// Find kubelet process
+	kubeletPID, err := findKubeletProcess()
+	if err != nil {
+		klog.V(4).Infof("Failed to find kubelet process: %v", err)
+		return ""
+	}
+
+	// Read command line arguments from /proc/<pid>/cmdline
+	cmdline, err := readProcessCmdline(kubeletPID)
+	if err != nil {
+		klog.V(4).Infof("Failed to read kubelet cmdline: %v", err)
+		return ""
+	}
+
+	// Parse cgroup driver from command line arguments
+	return parseCgroupDriverFromCmdline(cmdline)
 }
 
 // parseKubeletConfig parses kubelet config file to extract cgroup driver
@@ -207,6 +251,101 @@ func parseKubeletConfig(configPath string) string {
 						}
 					}
 				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// findKubeletProcess finds the kubelet process PID by reading /proc filesystem
+func findKubeletProcess() (int, error) {
+	procDir, err := os.Open("/proc")
+	if err != nil {
+		return 0, fmt.Errorf("failed to open /proc: %v", err)
+	}
+	defer procDir.Close()
+
+	entries, err := procDir.Readdirnames(0)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read /proc directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		// Check if entry is a numeric PID
+		pid, err := strconv.Atoi(entry)
+		if err != nil {
+			continue // Skip non-numeric entries
+		}
+
+		// Read process comm file to get process name
+		commPath := filepath.Join("/proc", entry, "comm")
+		commData, err := os.ReadFile(commPath)
+		if err != nil {
+			continue // Skip if we can't read comm file
+		}
+
+		// Check if this is kubelet process
+		comm := strings.TrimSpace(string(commData))
+		if comm == "kubelet" {
+			return pid, nil
+		}
+	}
+
+	return 0, fmt.Errorf("kubelet process not found")
+}
+
+// readProcessCmdline reads the command line arguments from /proc/<pid>/cmdline
+func readProcessCmdline(pid int) ([]string, error) {
+	cmdlinePath := filepath.Join("/proc", strconv.Itoa(pid), "cmdline")
+	cmdlineData, err := os.ReadFile(cmdlinePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cmdline file: %v", err)
+	}
+
+	// Split by null bytes and filter out empty strings
+	var args []string
+	for _, arg := range strings.Split(string(cmdlineData), "\x00") {
+		if arg != "" {
+			args = append(args, arg)
+		}
+	}
+
+	return args, nil
+}
+
+// parseCgroupDriverFromCmdline parses cgroup driver from command line arguments
+func parseCgroupDriverFromCmdline(args []string) string {
+	// First, try to find --cgroup-driver parameter
+	for i, arg := range args {
+		// Handle both formats: "--cgroup-driver=value" and "--cgroup-driver value"
+		if strings.HasPrefix(arg, "--cgroup-driver=") {
+			driver := strings.TrimPrefix(arg, "--cgroup-driver=")
+			if driver == CgroupDriverSystemd || driver == CgroupDriverCgroupfs {
+				return driver
+			}
+		} else if arg == "--cgroup-driver" && i+1 < len(args) {
+			driver := args[i+1]
+			if driver == CgroupDriverSystemd || driver == CgroupDriverCgroupfs {
+				return driver
+			}
+		}
+	}
+
+	// If --cgroup-driver not found, try to find --config parameter
+	for i, arg := range args {
+		// Handle both formats: "--config=value" and "--config value"
+		if strings.HasPrefix(arg, "--config=") {
+			configPath := strings.TrimPrefix(arg, "--config=")
+			// Read and parse the config file
+			if driver := parseKubeletConfig(configPath); driver != "" {
+				return driver
+			}
+		} else if arg == "--config" && i+1 < len(args) {
+			configPath := args[i+1]
+			// Read and parse the config file
+			if driver := parseKubeletConfig(configPath); driver != "" {
+				return driver
 			}
 		}
 	}

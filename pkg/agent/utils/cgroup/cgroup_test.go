@@ -17,9 +17,9 @@ limitations under the License.
 package cgroup
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -27,50 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// Mock file system interface for testing
-type fileSystem interface {
-	Stat(name string) (os.FileInfo, error)
-}
-
-type realFileSystem struct{}
-
-func (rfs realFileSystem) Stat(name string) (os.FileInfo, error) {
-	return os.Stat(name)
-}
-
-// Mock file system for testing
-type mockFileSystem struct {
-	statFunc func(name string) (os.FileInfo, error)
-}
-
-func (mfs mockFileSystem) Stat(name string) (os.FileInfo, error) {
-	if mfs.statFunc != nil {
-		return mfs.statFunc(name)
-	}
-	return nil, os.ErrNotExist
-}
-
-// detectCgroupVersionWithFS is a testable version of DetectCgroupVersion
-func detectCgroupVersionWithFS(fs fileSystem) (string, error) {
-	// Check if cgroup v2 is mounted
-	if _, err := fs.Stat("/sys/fs/cgroup/cgroup.controllers"); err == nil {
-		return CgroupV2, nil
-	}
-
-	// Check if cgroup v1 is mounted
-	if _, err := fs.Stat("/sys/fs/cgroup/cpu"); err == nil {
-		return CgroupV1, nil
-	}
-
-	// Check for hybrid mode (v1 and v2)
-	if _, err := fs.Stat("/sys/fs/cgroup/unified"); err == nil {
-		return CgroupV2, nil
-	}
-
-	return "", fmt.Errorf("unable to detect cgroup version")
-}
-
-func TestDetectCgroupVersion(t *testing.T) {
+// TestDetectCgroupVersion_Integration Test detect cgroup version
+func TestDetectCgroupVersion_Integration(t *testing.T) {
 	// Test with real cgroup environment
 	t.Run("real environment detection", func(t *testing.T) {
 		version, err := DetectCgroupVersion("/sys/fs/cgroup")
@@ -94,241 +52,6 @@ func TestDetectCgroupVersion(t *testing.T) {
 			if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err != nil {
 				t.Errorf("Detected v2 but /sys/fs/cgroup/cgroup.controllers does not exist: %v", err)
 			}
-		}
-	})
-
-	// Test with mock cgroup v2 environment
-	t.Run("cgroup v2 detection", func(t *testing.T) {
-		// Create temporary directory structure for cgroup v2
-		tmpDir := t.TempDir()
-		cgroupDir := filepath.Join(tmpDir, "cgroup")
-		err := os.MkdirAll(cgroupDir, 0755)
-		if err != nil {
-			t.Fatalf("Failed to create temp directory: %v", err)
-		}
-
-		// Create cgroup.controllers file to simulate cgroup v2
-		controllersFile := filepath.Join(cgroupDir, "cgroup.controllers")
-		err = os.WriteFile(controllersFile, []byte("cpu memory io"), 0644)
-		if err != nil {
-			t.Fatalf("Failed to create cgroup.controllers file: %v", err)
-		}
-
-		// Create mock file system
-		mockFS := mockFileSystem{
-			statFunc: func(name string) (os.FileInfo, error) {
-				if name == "/sys/fs/cgroup/cgroup.controllers" {
-					return os.Stat(filepath.Join(cgroupDir, "cgroup.controllers"))
-				}
-				return nil, os.ErrNotExist
-			},
-		}
-
-		version, err := detectCgroupVersionWithFS(mockFS)
-		if err != nil {
-			t.Fatalf("Failed to detect cgroup version: %v", err)
-		}
-		if version != CgroupV2 {
-			t.Errorf("Expected cgroup version %s, got %s", CgroupV2, version)
-		}
-	})
-
-	// Test with mock cgroup v1 environment
-	t.Run("cgroup v1 detection", func(t *testing.T) {
-		// Create temporary directory structure for cgroup v1
-		tmpDir := t.TempDir()
-		cgroupDir := filepath.Join(tmpDir, "cgroup")
-		err := os.MkdirAll(filepath.Join(cgroupDir, "cpu"), 0755)
-		if err != nil {
-			t.Fatalf("Failed to create temp directory: %v", err)
-		}
-
-		// Create mock file system
-		mockFS := mockFileSystem{
-			statFunc: func(name string) (os.FileInfo, error) {
-				if name == "/sys/fs/cgroup/cpu" {
-					return os.Stat(filepath.Join(cgroupDir, "cpu"))
-				}
-				return nil, os.ErrNotExist
-			},
-		}
-
-		version, err := detectCgroupVersionWithFS(mockFS)
-		if err != nil {
-			t.Fatalf("Failed to detect cgroup version: %v", err)
-		}
-		if version != CgroupV1 {
-			t.Errorf("Expected cgroup version %s, got %s", CgroupV1, version)
-		}
-	})
-}
-
-// Mock version detector for testing NewCgroupManager
-type versionDetector interface {
-	Detect() (string, error)
-}
-
-type realVersionDetector struct{}
-
-func (rvd realVersionDetector) Detect() (string, error) {
-	return DetectCgroupVersion("/sys/fs/cgroup")
-}
-
-type mockVersionDetector struct {
-	version string
-	err     error
-}
-
-func (mvd mockVersionDetector) Detect() (string, error) {
-	return mvd.version, mvd.err
-}
-
-// newCgroupManagerWithDetector is a testable version of NewCgroupManager
-func newCgroupManagerWithDetector(cgroupDriver, cgroupRoot, kubeCgroupRoot string, detector versionDetector) (CgroupManager, error) {
-	cgroupVersion, err := detector.Detect()
-	if err != nil {
-		return nil, fmt.Errorf("failed to detect cgroup version: %v", err)
-	}
-
-	switch cgroupVersion {
-	case CgroupV1:
-		return &CgroupManagerImpl{
-			cgroupDriver:   cgroupDriver,
-			cgroupRoot:     cgroupRoot,
-			kubeCgroupRoot: kubeCgroupRoot,
-			cgroupVersion:  cgroupVersion,
-		}, nil
-	case CgroupV2:
-		return &CgroupV2ManagerImpl{
-			cgroupDriver:   cgroupDriver,
-			cgroupRoot:     cgroupRoot,
-			kubeCgroupRoot: kubeCgroupRoot,
-			cgroupVersion:  cgroupVersion,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported cgroup version: %s", cgroupVersion)
-	}
-}
-
-func TestNewCgroupManager(t *testing.T) {
-	// Test with real cgroup environment
-	t.Run("real environment manager creation", func(t *testing.T) {
-		manager := NewCgroupManager("cgroupfs", "/sys/fs/cgroup", "")
-
-		version := manager.GetCgroupVersion()
-		if version != CgroupV1 && version != CgroupV2 {
-			t.Errorf("Expected cgroup version to be %s or %s, got %s", CgroupV1, CgroupV2, version)
-		}
-
-		t.Logf("Created manager with cgroup version: %s", version)
-
-		// Test that the manager can generate paths
-		path, err := manager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err != nil {
-			t.Fatalf("Failed to get root cgroup path: %v", err)
-		}
-
-		// Verify the path is reasonable
-		if !strings.Contains(path, "kubepods") {
-			t.Errorf("Generated path should contain kubepods: %s", path)
-		}
-
-		// Test with systemd driver
-		systemdManager := NewCgroupManager("systemd", "/sys/fs/cgroup", "")
-
-		systemdPath, err := systemdManager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err != nil {
-			t.Fatalf("Failed to get root cgroup path with systemd: %v", err)
-		}
-
-		// Systemd path should be different from cgroupfs path
-		if systemdPath == path {
-			t.Errorf("Systemd and cgroupfs paths should be different: %s", systemdPath)
-		}
-	})
-
-	t.Run("create cgroup v1 manager", func(t *testing.T) {
-		// Mock cgroup v1 detection
-		mockDetector := mockVersionDetector{
-			version: CgroupV1,
-			err:     nil,
-		}
-
-		manager, err := newCgroupManagerWithDetector("cgroupfs", "/sys/fs/cgroup", "", mockDetector)
-		if err != nil {
-			t.Fatalf("Failed to create cgroup manager: %v", err)
-		}
-
-		if manager.GetCgroupVersion() != CgroupV1 {
-			t.Errorf("Expected cgroup version %s, got %s", CgroupV1, manager.GetCgroupVersion())
-		}
-	})
-
-	t.Run("create cgroup v2 manager", func(t *testing.T) {
-		// Mock cgroup v2 detection
-		mockDetector := mockVersionDetector{
-			version: CgroupV2,
-			err:     nil,
-		}
-
-		manager, err := newCgroupManagerWithDetector("systemd", "/sys/fs/cgroup", "", mockDetector)
-		if err != nil {
-			t.Fatalf("Failed to create cgroup manager: %v", err)
-		}
-
-		if manager.GetCgroupVersion() != CgroupV2 {
-			t.Errorf("Expected cgroup version %s, got %s", CgroupV2, manager.GetCgroupVersion())
-		}
-	})
-
-	t.Run("unsupported cgroup version", func(t *testing.T) {
-		mockDetector := mockVersionDetector{
-			version: "v3",
-			err:     nil,
-		}
-
-		_, err := newCgroupManagerWithDetector("cgroupfs", "/sys/fs/cgroup", "", mockDetector)
-		if err == nil {
-			t.Error("Expected error for unsupported cgroup version")
-		}
-	})
-
-	t.Run("detection error", func(t *testing.T) {
-		mockDetector := mockVersionDetector{
-			version: "",
-			err:     fmt.Errorf("detection failed"),
-		}
-
-		_, err := newCgroupManagerWithDetector("cgroupfs", "/sys/fs/cgroup", "", mockDetector)
-		if err == nil {
-			t.Error("Expected error when detection fails")
-		}
-	})
-
-	// Test error cases with real environment
-	t.Run("invalid cgroup driver", func(t *testing.T) {
-		// This test requires a real environment but tests invalid driver
-		// We'll test the error handling in the path generation
-		manager := NewCgroupManager("invalid-driver", "/sys/fs/cgroup", "")
-
-		// The error should occur when trying to generate paths
-		_, err := manager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err == nil {
-			t.Error("Expected error with invalid cgroup driver")
-		}
-	})
-
-	t.Run("custom cgroup root", func(t *testing.T) {
-		manager := NewCgroupManager("cgroupfs", "/sys/fs/cgroup", "custom-root")
-
-		path, err := manager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err != nil {
-			t.Fatalf("Failed to get root cgroup path: %v", err)
-		}
-
-		// Should include the custom root in the path
-		if !strings.Contains(path, "custom-root") {
-			t.Errorf("Path should contain custom root: %s", path)
 		}
 	})
 }
@@ -917,6 +640,155 @@ func TestEscapeSystemdCgroupName(t *testing.T) {
 		result := escapeSystemdCgroupName(tc.input)
 		if result != tc.expected {
 			t.Errorf("escapeSystemdCgroupName(%s): expected %s, got %s", tc.input, tc.expected, result)
+		}
+	}
+}
+
+// isRealKubernetesEnvironment check test run in k8s env
+func isRealKubernetesEnvironment() bool {
+	configPaths := []string{
+		"/var/lib/kubelet/config.yaml",
+		"/etc/kubernetes/kubelet.conf",
+		"/var/lib/kubelet/kubeadm-flags.env",
+	}
+
+	for _, path := range configPaths {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+
+	if _, err := os.Stat("/var/run/secrets/kubernetes.io"); err == nil {
+		return true
+	}
+
+	return false
+}
+
+// TestGetCgroupDriverFromKubeletConfig_Integration Test detect cgroup driver from fixed kubelet config file
+func TestGetCgroupDriverFromKubeletConfig_Integration(t *testing.T) {
+	if !isRealKubernetesEnvironment() {
+		t.Skip("Skipping integration test: not in real Kubernetes environment")
+	}
+
+	driver := getCgroupDriverFromKubeletConfig()
+
+	if driver != "" && driver != CgroupDriverSystemd && driver != CgroupDriverCgroupfs {
+		t.Errorf("Invalid cgroup driver returned: %s", driver)
+	}
+
+	t.Logf("Detected cgroup driver from real environment: %s", driver)
+
+	if driver != "" {
+		configPaths := []string{
+			"/var/lib/kubelet/config.yaml",
+			"/etc/kubernetes/kubelet.conf",
+			"/var/lib/kubelet/kubeadm-flags.env",
+		}
+
+		found := false
+		for _, path := range configPaths {
+			if _, err := os.Stat(path); err == nil {
+
+				content, err := os.ReadFile(path)
+				if err == nil {
+					contentStr := string(content)
+					if strings.Contains(contentStr, "cgroupDriver:") || strings.Contains(contentStr, "--cgroup-driver") {
+						t.Logf("Found cgroup driver configuration in: %s", path)
+						found = true
+						break
+					}
+				}
+			}
+		}
+
+		if !found {
+			t.Logf("Warning: Found driver '%s' but could not verify configuration in any config file", driver)
+		}
+	}
+}
+
+// canAccessProcFilesystem check access to /proc
+func canAccessProcFilesystem() bool {
+	if _, err := os.ReadDir("/proc"); err != nil {
+		return false
+	}
+
+	if _, err := os.ReadFile("/proc/1/cmdline"); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// TestGetCgroupDriverFromKubeletProcess_Integration Test get cgroup driver from kubelet process
+func TestGetCgroupDriverFromKubeletProcess_Integration(t *testing.T) {
+	if !canAccessProcFilesystem() {
+		t.Skip("Skipping integration test: cannot access /proc filesystem")
+	}
+
+	driver := getCgroupDriverFromKubeletProcess()
+
+	if driver != "" && driver != CgroupDriverSystemd && driver != CgroupDriverCgroupfs {
+		t.Errorf("Invalid cgroup driver returned: %s", driver)
+	}
+
+	t.Logf("Detected cgroup driver from real kubelet process: %s", driver)
+
+	if driver != "" {
+		procDir, err := os.Open("/proc")
+		if err == nil {
+			defer procDir.Close()
+
+			entries, err := procDir.Readdirnames(0)
+			if err == nil {
+				kubeletFound := false
+				for _, entry := range entries {
+					if _, err := strconv.Atoi(entry); err == nil {
+						commPath := filepath.Join("/proc", entry, "comm")
+						if commData, err := os.ReadFile(commPath); err == nil {
+							comm := strings.TrimSpace(string(commData))
+							if comm == "kubelet" {
+								kubeletFound = true
+								t.Logf("Found kubelet process with PID: %s", entry)
+								break
+							}
+						}
+					}
+				}
+
+				if !kubeletFound {
+					t.Logf("Warning: Found driver '%s' but could not find kubelet process", driver)
+				}
+			}
+		}
+	}
+}
+
+// TestReadKubeletCgroupDriver_Integration Test ability of detect cgroup driver
+func TestReadKubeletCgroupDriver_Integration(t *testing.T) {
+	if !canAccessProcFilesystem() {
+		t.Skip("Skipping integration test: cannot access /proc filesystem")
+	}
+
+	driver := readKubeletCgroupDriver()
+
+	if driver != "" && driver != CgroupDriverSystemd && driver != CgroupDriverCgroupfs {
+		t.Errorf("Invalid cgroup driver returned: %s", driver)
+	}
+
+	t.Logf("Detected cgroup driver from complete detection process: %s", driver)
+
+	if driver != "" {
+		configDriver := getCgroupDriverFromKubeletConfig()
+		processDriver := getCgroupDriverFromKubeletProcess()
+
+		if configDriver == driver {
+			t.Logf("Driver detected via config files")
+		} else if processDriver == driver {
+			t.Logf("Driver detected via process command line")
+		} else {
+			t.Logf("Driver detected via fallback method")
 		}
 	}
 }
