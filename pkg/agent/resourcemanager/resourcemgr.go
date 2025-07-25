@@ -1,7 +1,6 @@
 package resourcemanager
 
 import (
-	"context"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sync"
@@ -21,7 +20,7 @@ type ResourceManager struct {
 
 // ResourceHandler 资源处理器接口
 type ResourceHandler interface {
-	SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error
+	SetCPUQoSLevel(podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error
 	SetCPUBurst(qosClass corev1.PodQOSClass, podUID types.UID, quotaBurstTime int64, pod *corev1.Pod) error
 	SetMemoryQoS(podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error
 	SetResourceLimit(podEvent framework.PodEvent) error

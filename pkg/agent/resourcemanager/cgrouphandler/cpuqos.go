@@ -1,7 +1,6 @@
 package cgrouphandler
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	corev1 "k8s.io/api/core/v1"
@@ -14,7 +13,7 @@ import (
 	"volcano.sh/volcano/pkg/agent/utils/cgroup"
 )
 
-func (c *CgroupHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
+func (c *CgroupHandler) SetCPUQoSLevel(podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
 	cgroupPath, err := c.cgroupMgr.GetPodCgroupPath(qosClass, cgroup.CgroupCpuSubsystem, podUID)
 	if err != nil {
 		return fmt.Errorf("failed to get pod cgroup file(%s), error: %v", podUID, err)

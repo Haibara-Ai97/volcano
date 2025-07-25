@@ -1,7 +1,6 @@
 package systemdhandler
 
 import (
-	"context"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,7 +8,7 @@ import (
 	"volcano.sh/volcano/pkg/agent/resourcemanager/utils"
 )
 
-func (s *SystemdHandler) SetCPUQoSLevel(ctx context.Context, podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
+func (s *SystemdHandler) SetCPUQoSLevel(podUID types.UID, qosClass corev1.PodQOSClass, qosLevel int64) error {
 	serviceName := s.getServiceName(podUID, qosClass)
 	if serviceName == "" {
 		return fmt.Errorf("failed to get service name for pod %s", podUID)
