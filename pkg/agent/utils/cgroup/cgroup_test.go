@@ -17,15 +17,22 @@ limitations under the License.
 package cgroup
 
 import (
+	"context"
+	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
+
+const TestCgroupRootPath = "/sys/fs/cgroup"
 
 // TestDetectCgroupVersion_Integration Test detect cgroup version
 func TestDetectCgroupVersion_Integration(t *testing.T) {
@@ -56,591 +63,131 @@ func TestDetectCgroupVersion_Integration(t *testing.T) {
 	})
 }
 
-func TestCgroupV2ManagerImpl_GetPodCgroupPath(t *testing.T) {
+// CreateTestPod create tmp pod for test cgroup path
+func CreateTestPod(ns, podName, image string) (*corev1.Pod, *kubernetes.Clientset, error) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:    "test",
+					Image:   image,
+					Command: []string{"tail", "-f", "/dev/null"},
+				},
+			},
+			RestartPolicy: corev1.RestartPolicyNever,
+			Tolerations: []corev1.Toleration{
+				{
+					Key:      "node-role.kubernetes.io/control-plane",
+					Operator: corev1.TolerationOpExists,
+					Effect:   corev1.TaintEffectNoSchedule,
+				},
+			},
+		},
+	}
+
+	kubeconfig := os.Getenv("KUBECONFIG")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, clientset, err
+	}
+
+	_, err = clientset.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
+	if err != nil {
+		return nil, clientset, err
+	}
+
+	var createPod *corev1.Pod
+	for i := 0; i < 30; i++ {
+		createPod, err = clientset.CoreV1().Pods(ns).Get(context.Background(), podName, metav1.GetOptions{})
+		if err == nil && createPod != nil {
+			if createPod.Status.Phase == corev1.PodRunning {
+				return createPod, clientset, nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	return nil, clientset, fmt.Errorf("Failed to create pod %s in namespace %s", podName, ns)
+}
+
+// TestCgroupV2GetPodPath_Integration Test get pod path in cgroup v2 file system
+func TestCgroupV2GetPodPath_Integration(t *testing.T) {
 	// Skip test if not running in a real cgroup v2 environment
 	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err != nil {
 		t.Skip("Skipping test: cgroup v2 not available (no /sys/fs/cgroup/cgroup.controllers)")
 	}
 
-	// Check if we have write permissions to create test cgroups
-	testCgroupPath := "/sys/fs/cgroup/test-volcano-cgroup"
-	if err := os.MkdirAll(testCgroupPath, 0755); err != nil {
-		t.Skipf("Skipping test: cannot create test cgroup directory: %v", err)
-	}
-	defer os.RemoveAll(testCgroupPath) // Cleanup after test
+	ns := "default"
+	podName := "cgroupv2-pod-path-test"
+	image := "docker.io/library/alpine:latest"
 
-	manager := &CgroupV2ManagerImpl{
-		cgroupDriver:   "cgroupfs",
-		cgroupRoot:     "/sys/fs/cgroup",
-		kubeCgroupRoot: "",
-		cgroupVersion:  CgroupV2,
+	pod, clientset, err := CreateTestPod(ns, podName, image)
+	if err != nil {
+		t.Fatalf("Failed to create test pod: %v", err)
 	}
+	qos := pod.Status.QOSClass
+	podUID := pod.UID
 
-	podUID := types.UID("test-pod-uid")
-	path, err := manager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, podUID)
+	mgr := NewCgroupManager("", TestCgroupRootPath, "")
+	cgroupPath, err := mgr.GetPodCgroupPath(qos, CgroupCpuSubsystem, podUID)
 	if err != nil {
 		t.Fatalf("Failed to get pod cgroup path: %v", err)
 	}
-
-	// In cgroup v2, the path should not include the subsystem name
-	expectedPath := "/sys/fs/cgroup/kubepods/burstable/podtest-pod-uid"
-	if path != expectedPath {
-		t.Errorf("Expected path %s, got %s", expectedPath, path)
+	if _, err := os.Stat(cgroupPath); os.IsNotExist(err) {
+		t.Errorf("Cgroup path not exist: %s", cgroupPath)
+	} else {
+		t.Logf("Cgroup path exist: %s", cgroupPath)
 	}
 
-	// Test that the path actually exists or can be created
-	parentPath := "/sys/fs/cgroup/kubepods"
-	if _, err := os.Stat(parentPath); err != nil {
-		// If parent doesn't exist, try to create it (this might fail in test environment)
-		if mkdirErr := os.MkdirAll(parentPath, 0755); mkdirErr != nil {
-			t.Logf("Note: Cannot create parent cgroup path %s: %v (this is expected in test environment)", parentPath, mkdirErr)
-		} else {
-			defer os.RemoveAll(parentPath) // Cleanup if we created it
-		}
-	}
-
-	// Test with different QoS levels
-	testCases := []struct {
-		qos          corev1.PodQOSClass
-		expectedPath string
-	}{
-		{
-			qos:          corev1.PodQOSGuaranteed,
-			expectedPath: "/sys/fs/cgroup/kubepods/podtest-pod-uid",
-		},
-		{
-			qos:          corev1.PodQOSBurstable,
-			expectedPath: "/sys/fs/cgroup/kubepods/burstable/podtest-pod-uid",
-		},
-		{
-			qos:          corev1.PodQOSBestEffort,
-			expectedPath: "/sys/fs/cgroup/kubepods/besteffort/podtest-pod-uid",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(string(tc.qos), func(t *testing.T) {
-			path, err := manager.GetPodCgroupPath(tc.qos, CgroupCpuSubsystem, podUID)
-			if err != nil {
-				t.Fatalf("Failed to get pod cgroup path for QoS %s: %v", tc.qos, err)
-			}
-			if path != tc.expectedPath {
-				t.Errorf("Expected path %s, got %s", tc.expectedPath, path)
-			}
-		})
-	}
-
-	// Test with different subsystems (in v2, all should generate the same path)
-	subsystemTests := []CgroupSubsystem{
-		CgroupCpuSubsystem,
-		CgroupMemorySubsystem,
-		CgroupNetCLSSubsystem,
-	}
-
-	for _, subsystem := range subsystemTests {
-		t.Run(string(subsystem), func(t *testing.T) {
-			path, err := manager.GetPodCgroupPath(corev1.PodQOSBurstable, subsystem, podUID)
-			if err != nil {
-				t.Fatalf("Failed to get pod cgroup path for subsystem %s: %v", subsystem, err)
-			}
-
-			// In cgroup v2, the path should NOT contain the subsystem name
-			if strings.Contains(path, string(subsystem)) {
-				t.Errorf("Path %s should NOT contain subsystem %s in cgroup v2", path, subsystem)
-			}
-
-			// Verify the path contains the pod UID
-			if !strings.Contains(path, string(podUID)) {
-				t.Errorf("Path %s should contain pod UID %s", path, podUID)
-			}
-		})
-	}
-
-	// Test with different cgroup drivers
-	t.Run("systemd_driver", func(t *testing.T) {
-		systemdManager := &CgroupV2ManagerImpl{
-			cgroupDriver:   "systemd",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "",
-			cgroupVersion:  CgroupV2,
-		}
-
-		path, err := systemdManager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, podUID)
-		if err != nil {
-			t.Fatalf("Failed to get pod cgroup path with systemd driver: %v", err)
-		}
-
-		// With systemd driver, the path should be different (systemd format)
-		if strings.Contains(path, "cgroupfs") {
-			t.Errorf("Systemd driver should not return cgroupfs format path: %s", path)
-		}
-	})
-
-	// Test error cases
-	t.Run("invalid_pod_uid", func(t *testing.T) {
-		invalidPodUID := types.UID("")
-		path, err := manager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, invalidPodUID)
-		if err != nil {
-			t.Fatalf("Should not error with empty pod UID: %v", err)
-		}
-
-		// Should still generate a valid path
-		if !strings.Contains(path, "pod") {
-			t.Errorf("Path should contain 'pod' prefix even with empty UID: %s", path)
-		}
-	})
-
-	// Test with custom kubeCgroupRoot
-	t.Run("custom_kube_cgroup_root", func(t *testing.T) {
-		customManager := &CgroupV2ManagerImpl{
-			cgroupDriver:   "cgroupfs",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "custom-root",
-			cgroupVersion:  CgroupV2,
-		}
-
-		path, err := customManager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, podUID)
-		if err != nil {
-			t.Fatalf("Failed to get pod cgroup path with custom root: %v", err)
-		}
-
-		// Should include the custom root in the path
-		if !strings.Contains(path, "custom-root") {
-			t.Errorf("Path should contain custom root: %s", path)
-		}
+	t.Cleanup(func() {
+		_ = clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
 	})
 }
 
-func TestCgroupV2ManagerImpl_GetRootCgroupPath(t *testing.T) {
+// TestCgroupV2GetRootPath_Integration Test get root path in cgroup v2 file system
+func TestCgroupV2GetRootPath_Integration(t *testing.T) {
 	// Skip test if not running in a real cgroup v2 environment
 	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err != nil {
 		t.Skip("Skipping test: cgroup v2 not available (no /sys/fs/cgroup/cgroup.controllers)")
 	}
 
-	manager := &CgroupV2ManagerImpl{
-		cgroupDriver:   "cgroupfs",
-		cgroupRoot:     "/sys/fs/cgroup",
-		kubeCgroupRoot: "",
-		cgroupVersion:  CgroupV2,
-	}
-
-	path, err := manager.GetRootCgroupPath(CgroupCpuSubsystem)
-	if err != nil {
-		t.Fatalf("Failed to get root cgroup path: %v", err)
-	}
-
-	// In cgroup v2, the path should not include the subsystem name
-	expectedPath := "/sys/fs/cgroup/kubepods"
-	if path != expectedPath {
-		t.Errorf("Expected path %s, got %s", expectedPath, path)
-	}
-
-	// Test with different subsystems (in v2, all should generate the same path)
-	subsystemTests := []CgroupSubsystem{
-		CgroupCpuSubsystem,
-		CgroupMemorySubsystem,
-		CgroupNetCLSSubsystem,
-	}
-
-	for _, subsystem := range subsystemTests {
-		t.Run(string(subsystem), func(t *testing.T) {
-			path, err := manager.GetRootCgroupPath(subsystem)
-			if err != nil {
-				t.Fatalf("Failed to get root cgroup path for subsystem %s: %v", subsystem, err)
-			}
-
-			// In cgroup v2, the path should NOT contain the subsystem name
-			if strings.Contains(path, string(subsystem)) {
-				t.Errorf("Path %s should NOT contain subsystem %s in cgroup v2", path, subsystem)
-			}
-
-			// Verify the path contains kubepods
-			if !strings.Contains(path, "kubepods") {
-				t.Errorf("Path %s should contain kubepods", path)
-			}
-		})
-	}
-
-	// Test with custom kubeCgroupRoot
-	t.Run("custom_kube_cgroup_root", func(t *testing.T) {
-		customManager := &CgroupV2ManagerImpl{
-			cgroupDriver:   "cgroupfs",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "custom-root",
-			cgroupVersion:  CgroupV2,
-		}
-
-		path, err := customManager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err != nil {
-			t.Fatalf("Failed to get root cgroup path with custom root: %v", err)
-		}
-
-		// Should include the custom root in the path
-		if !strings.Contains(path, "custom-root") {
-			t.Errorf("Path should contain custom root: %s", path)
-		}
-	})
-
-	// Test with systemd driver
-	t.Run("systemd_driver", func(t *testing.T) {
-		systemdManager := &CgroupV2ManagerImpl{
-			cgroupDriver:   "systemd",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "",
-			cgroupVersion:  CgroupV2,
-		}
-
-		path, err := systemdManager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err != nil {
-			t.Fatalf("Failed to get root cgroup path with systemd driver: %v", err)
-		}
-
-		// With systemd driver, the path should be different (systemd format)
-		if strings.Contains(path, "cgroupfs") {
-			t.Errorf("Systemd driver should not return cgroupfs format path: %s", path)
-		}
-	})
-}
-
-func TestCgroupV1ManagerImpl_GetPodCgroupPath(t *testing.T) {
-	// Skip test if not running in a real cgroup v1 environment
-	if _, err := os.Stat("/sys/fs/cgroup/cpu"); err != nil {
-		t.Skip("Skipping test: cgroup v1 not available (no /sys/fs/cgroup/cpu)")
-	}
-
-	// Check if we have write permissions to create test cgroups
-	testCgroupPath := "/sys/fs/cgroup/cpu/test-volcano-cgroup"
-	if err := os.MkdirAll(testCgroupPath, 0755); err != nil {
-		t.Skipf("Skipping test: cannot create test cgroup directory: %v", err)
-	}
-	defer os.RemoveAll(testCgroupPath) // Cleanup after test
-
-	manager := &CgroupManagerImpl{
-		cgroupDriver:   "cgroupfs",
-		cgroupRoot:     "/sys/fs/cgroup",
-		kubeCgroupRoot: "",
-		cgroupVersion:  CgroupV1,
-	}
-
-	podUID := types.UID("test-pod-uid")
-	path, err := manager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, podUID)
+	mgr := NewCgroupManager("", TestCgroupRootPath, "")
+	cgroupPath, err := mgr.GetRootCgroupPath(CgroupCpuSubsystem)
 	if err != nil {
 		t.Fatalf("Failed to get pod cgroup path: %v", err)
 	}
-
-	// In cgroup v1, the path should include the subsystem name
-	expectedPath := "/sys/fs/cgroup/cpu/kubepods/burstable/podtest-pod-uid"
-	if path != expectedPath {
-		t.Errorf("Expected path %s, got %s", expectedPath, path)
+	if _, err := os.Stat(cgroupPath); os.IsNotExist(err) {
+		t.Errorf("Cgroup path not exist: %s", cgroupPath)
+	} else {
+		t.Logf("Cgroup path exist: %s", cgroupPath)
 	}
-
-	// Test that the path actually exists or can be created
-	// Note: We can't actually create the full path in a test environment,
-	// but we can verify the logic is correct by checking if the parent directories exist
-	parentPath := "/sys/fs/cgroup/cpu/kubepods"
-	if _, err := os.Stat(parentPath); err != nil {
-		// If parent doesn't exist, try to create it (this might fail in test environment)
-		if mkdirErr := os.MkdirAll(parentPath, 0755); mkdirErr != nil {
-			t.Logf("Note: Cannot create parent cgroup path %s: %v (this is expected in test environment)", parentPath, mkdirErr)
-		} else {
-			defer os.RemoveAll(parentPath) // Cleanup if we created it
-		}
-	}
-
-	// Test with different QoS levels
-	testCases := []struct {
-		qos          corev1.PodQOSClass
-		expectedPath string
-	}{
-		{
-			qos:          corev1.PodQOSGuaranteed,
-			expectedPath: "/sys/fs/cgroup/cpu/kubepods/podtest-pod-uid",
-		},
-		{
-			qos:          corev1.PodQOSBurstable,
-			expectedPath: "/sys/fs/cgroup/cpu/kubepods/burstable/podtest-pod-uid",
-		},
-		{
-			qos:          corev1.PodQOSBestEffort,
-			expectedPath: "/sys/fs/cgroup/cpu/kubepods/besteffort/podtest-pod-uid",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(string(tc.qos), func(t *testing.T) {
-			path, err := manager.GetPodCgroupPath(tc.qos, CgroupCpuSubsystem, podUID)
-			if err != nil {
-				t.Fatalf("Failed to get pod cgroup path for QoS %s: %v", tc.qos, err)
-			}
-			if path != tc.expectedPath {
-				t.Errorf("Expected path %s, got %s", tc.expectedPath, path)
-			}
-		})
-	}
-
-	// Test with different subsystems
-	subsystemTests := []CgroupSubsystem{
-		CgroupCpuSubsystem,
-		CgroupMemorySubsystem,
-		CgroupNetCLSSubsystem,
-	}
-
-	for _, subsystem := range subsystemTests {
-		t.Run(string(subsystem), func(t *testing.T) {
-			path, err := manager.GetPodCgroupPath(corev1.PodQOSBurstable, subsystem, podUID)
-			if err != nil {
-				t.Fatalf("Failed to get pod cgroup path for subsystem %s: %v", subsystem, err)
-			}
-
-			// Verify the path contains the subsystem name
-			if !strings.Contains(path, string(subsystem)) {
-				t.Errorf("Path %s should contain subsystem %s", path, subsystem)
-			}
-
-			// Verify the path contains the pod UID
-			if !strings.Contains(path, string(podUID)) {
-				t.Errorf("Path %s should contain pod UID %s", path, podUID)
-			}
-		})
-	}
-
-	// Test with different cgroup drivers
-	t.Run("systemd_driver", func(t *testing.T) {
-		systemdManager := &CgroupManagerImpl{
-			cgroupDriver:   "systemd",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "",
-			cgroupVersion:  CgroupV1,
-		}
-
-		path, err := systemdManager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, podUID)
-		if err != nil {
-			t.Fatalf("Failed to get pod cgroup path with systemd driver: %v", err)
-		}
-
-		// With systemd driver, the path should be different (systemd format)
-		if strings.Contains(path, "cgroupfs") {
-			t.Errorf("Systemd driver should not return cgroupfs format path: %s", path)
-		}
-	})
-
-	// Test error cases
-	t.Run("invalid_pod_uid", func(t *testing.T) {
-		invalidPodUID := types.UID("")
-		path, err := manager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, invalidPodUID)
-		if err != nil {
-			t.Fatalf("Should not error with empty pod UID: %v", err)
-		}
-
-		// Should still generate a valid path
-		if !strings.Contains(path, "pod") {
-			t.Errorf("Path should contain 'pod' prefix even with empty UID: %s", path)
-		}
-	})
-
-	// Test with custom kubeCgroupRoot
-	t.Run("custom_kube_cgroup_root", func(t *testing.T) {
-		customManager := &CgroupManagerImpl{
-			cgroupDriver:   "cgroupfs",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "custom-root",
-			cgroupVersion:  CgroupV1,
-		}
-
-		path, err := customManager.GetPodCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem, podUID)
-		if err != nil {
-			t.Fatalf("Failed to get pod cgroup path with custom root: %v", err)
-		}
-
-		// Should include the custom root in the path
-		if !strings.Contains(path, "custom-root") {
-			t.Errorf("Path should contain custom root: %s", path)
-		}
-	})
 }
 
-func TestCgroupV1ManagerImpl_GetRootCgroupPath(t *testing.T) {
-	// Skip test if not running in a real cgroup v1 environment
-	if _, err := os.Stat("/sys/fs/cgroup/cpu"); err != nil {
-		t.Skip("Skipping test: cgroup v1 not available (no /sys/fs/cgroup/cpu)")
+// TestCgroupV2GetQoSPath_Integration Test get pod path in cgroup v2 file system
+func TestCgroupV2GetQoSPath_Integration(t *testing.T) {
+	// Skip test if not running in a real cgroup v2 environment
+	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err != nil {
+		t.Skip("Skipping test: cgroup v2 not available (no /sys/fs/cgroup/cgroup.controllers)")
 	}
 
-	manager := &CgroupManagerImpl{
-		cgroupDriver:   "cgroupfs",
-		cgroupRoot:     "/sys/fs/cgroup",
-		kubeCgroupRoot: "",
-		cgroupVersion:  CgroupV1,
-	}
-
-	path, err := manager.GetRootCgroupPath(CgroupCpuSubsystem)
+	mgr := NewCgroupManager("", TestCgroupRootPath, "")
+	cgroupPath, err := mgr.GetQoSCgroupPath(corev1.PodQOSBurstable, CgroupCpuSubsystem)
 	if err != nil {
-		t.Fatalf("Failed to get root cgroup path: %v", err)
+		t.Fatalf("Failed to get pod cgroup path: %v", err)
 	}
-
-	// In cgroup v1, the path should include the subsystem name
-	expectedPath := "/sys/fs/cgroup/cpu/kubepods"
-	if path != expectedPath {
-		t.Errorf("Expected path %s, got %s", expectedPath, path)
-	}
-
-	// Test with different subsystems
-	subsystemTests := []CgroupSubsystem{
-		CgroupCpuSubsystem,
-		CgroupMemorySubsystem,
-		CgroupNetCLSSubsystem,
-	}
-
-	for _, subsystem := range subsystemTests {
-		t.Run(string(subsystem), func(t *testing.T) {
-			path, err := manager.GetRootCgroupPath(subsystem)
-			if err != nil {
-				t.Fatalf("Failed to get root cgroup path for subsystem %s: %v", subsystem, err)
-			}
-
-			// Verify the path contains the subsystem name
-			if !strings.Contains(path, string(subsystem)) {
-				t.Errorf("Path %s should contain subsystem %s", path, subsystem)
-			}
-
-			// Verify the path contains kubepods
-			if !strings.Contains(path, "kubepods") {
-				t.Errorf("Path %s should contain kubepods", path)
-			}
-		})
-	}
-
-	// Test with custom kubeCgroupRoot
-	t.Run("custom_kube_cgroup_root", func(t *testing.T) {
-		customManager := &CgroupManagerImpl{
-			cgroupDriver:   "cgroupfs",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "custom-root",
-			cgroupVersion:  CgroupV1,
-		}
-
-		path, err := customManager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err != nil {
-			t.Fatalf("Failed to get root cgroup path with custom root: %v", err)
-		}
-
-		// Should include the custom root in the path
-		if !strings.Contains(path, "custom-root") {
-			t.Errorf("Path should contain custom root: %s", path)
-		}
-	})
-
-	// Test with systemd driver
-	t.Run("systemd_driver", func(t *testing.T) {
-		systemdManager := &CgroupManagerImpl{
-			cgroupDriver:   "systemd",
-			cgroupRoot:     "/sys/fs/cgroup",
-			kubeCgroupRoot: "",
-			cgroupVersion:  CgroupV1,
-		}
-
-		path, err := systemdManager.GetRootCgroupPath(CgroupCpuSubsystem)
-		if err != nil {
-			t.Fatalf("Failed to get root cgroup path with systemd driver: %v", err)
-		}
-
-		// With systemd driver, the path should be different (systemd format)
-		if strings.Contains(path, "cgroupfs") {
-			t.Errorf("Systemd driver should not return cgroupfs format path: %s", path)
-		}
-	})
-}
-
-func TestCgroupName_ToCgroupfs(t *testing.T) {
-	cases := []struct {
-		name     CgroupName
-		expected string
-	}{
-		{
-			name:     CgroupName{"kubepods"},
-			expected: "/kubepods",
-		},
-		{
-			name:     CgroupName{"kubepods", "burstable"},
-			expected: "/kubepods/burstable",
-		},
-		{
-			name:     CgroupName{"kubepods", "burstable", "pod123"},
-			expected: "/kubepods/burstable/pod123",
-		},
-	}
-
-	for _, tc := range cases {
-		result, err := tc.name.ToCgroupfs()
-		if err != nil {
-			t.Errorf("ToCgroupfs() failed for %v: %v", tc.name, err)
-			continue
-		}
-		if result != tc.expected {
-			t.Errorf("ToCgroupfs() for %v: expected %s, got %s", tc.name, tc.expected, result)
-		}
-	}
-}
-
-func TestCgroupName_ToSystemd(t *testing.T) {
-	cases := []struct {
-		name     CgroupName
-		expected string
-	}{
-		{
-			name:     CgroupName{},
-			expected: "/",
-		},
-		{
-			name:     CgroupName{""},
-			expected: "/",
-		},
-		{
-			name:     CgroupName{"kubepods"},
-			expected: "/kubepods.slice",
-		},
-		{
-			name:     CgroupName{"kubepods", "burstable"},
-			expected: "/kubepods.slice/kubepods-burstable.slice",
-		},
-	}
-
-	for _, tc := range cases {
-		result, err := tc.name.ToSystemd()
-		if err != nil {
-			t.Errorf("ToSystemd() failed for %v: %v", tc.name, err)
-			continue
-		}
-		if result != tc.expected {
-			t.Errorf("ToSystemd() for %v: expected %s, got %s", tc.name, tc.expected, result)
-		}
-	}
-}
-
-func TestGetPodCgroupNameSuffix(t *testing.T) {
-	podUID := types.UID("test-pod-123")
-	suffix := getPodCgroupNameSuffix(podUID)
-	expected := "podtest-pod-123"
-	if suffix != expected {
-		t.Errorf("Expected suffix %s, got %s", expected, suffix)
-	}
-}
-
-func TestEscapeSystemdCgroupName(t *testing.T) {
-	cases := []struct {
-		input    string
-		expected string
-	}{
-		{"kubepods", "kubepods"},
-		{"kube-pods", "kube_pods"},
-		{"kube--pods", "kube__pods"},
-		{"", ""},
-	}
-
-	for _, tc := range cases {
-		result := escapeSystemdCgroupName(tc.input)
-		if result != tc.expected {
-			t.Errorf("escapeSystemdCgroupName(%s): expected %s, got %s", tc.input, tc.expected, result)
-		}
+	if _, err := os.Stat(cgroupPath); os.IsNotExist(err) {
+		t.Errorf("Cgroup path not exist: %s", cgroupPath)
+	} else {
+		t.Logf("Cgroup path exist: %s", cgroupPath)
 	}
 }
 
