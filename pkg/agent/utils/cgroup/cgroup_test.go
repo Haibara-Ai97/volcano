@@ -73,7 +73,7 @@ func detectCgroupVersionWithFS(fs fileSystem) (string, error) {
 func TestDetectCgroupVersion(t *testing.T) {
 	// Test with real cgroup environment
 	t.Run("real environment detection", func(t *testing.T) {
-		version, err := DetectCgroupVersion()
+		version, err := DetectCgroupVersion("/sys/fs/cgroup")
 		if err != nil {
 			t.Fatalf("Failed to detect cgroup version in real environment: %v", err)
 		}
@@ -161,20 +161,6 @@ func TestDetectCgroupVersion(t *testing.T) {
 			t.Errorf("Expected cgroup version %s, got %s", CgroupV1, version)
 		}
 	})
-
-	// Test with no cgroup environment
-	t.Run("no cgroup environment", func(t *testing.T) {
-		mockFS := mockFileSystem{
-			statFunc: func(name string) (os.FileInfo, error) {
-				return nil, os.ErrNotExist
-			},
-		}
-
-		_, err := detectCgroupVersionWithFS(mockFS)
-		if err == nil {
-			t.Error("Expected error when no cgroup environment is detected")
-		}
-	})
 }
 
 // Mock version detector for testing NewCgroupManager
@@ -185,7 +171,7 @@ type versionDetector interface {
 type realVersionDetector struct{}
 
 func (rvd realVersionDetector) Detect() (string, error) {
-	return DetectCgroupVersion()
+	return DetectCgroupVersion("/sys/fs/cgroup")
 }
 
 type mockVersionDetector struct {
@@ -227,10 +213,7 @@ func newCgroupManagerWithDetector(cgroupDriver, cgroupRoot, kubeCgroupRoot strin
 func TestNewCgroupManager(t *testing.T) {
 	// Test with real cgroup environment
 	t.Run("real environment manager creation", func(t *testing.T) {
-		manager, err := NewCgroupManager("cgroupfs", "/sys/fs/cgroup", "")
-		if err != nil {
-			t.Fatalf("Failed to create cgroup manager in real environment: %v", err)
-		}
+		manager := NewCgroupManager("cgroupfs", "/sys/fs/cgroup", "")
 
 		version := manager.GetCgroupVersion()
 		if version != CgroupV1 && version != CgroupV2 {
@@ -251,10 +234,7 @@ func TestNewCgroupManager(t *testing.T) {
 		}
 
 		// Test with systemd driver
-		systemdManager, err := NewCgroupManager("systemd", "/sys/fs/cgroup", "")
-		if err != nil {
-			t.Fatalf("Failed to create systemd cgroup manager: %v", err)
-		}
+		systemdManager := NewCgroupManager("systemd", "/sys/fs/cgroup", "")
 
 		systemdPath, err := systemdManager.GetRootCgroupPath(CgroupCpuSubsystem)
 		if err != nil {
@@ -329,23 +309,17 @@ func TestNewCgroupManager(t *testing.T) {
 	t.Run("invalid cgroup driver", func(t *testing.T) {
 		// This test requires a real environment but tests invalid driver
 		// We'll test the error handling in the path generation
-		manager, err := NewCgroupManager("invalid-driver", "/sys/fs/cgroup", "")
-		if err != nil {
-			t.Fatalf("Manager creation should not fail with invalid driver: %v", err)
-		}
+		manager := NewCgroupManager("invalid-driver", "/sys/fs/cgroup", "")
 
 		// The error should occur when trying to generate paths
-		_, err = manager.GetRootCgroupPath(CgroupCpuSubsystem)
+		_, err := manager.GetRootCgroupPath(CgroupCpuSubsystem)
 		if err == nil {
 			t.Error("Expected error with invalid cgroup driver")
 		}
 	})
 
 	t.Run("custom cgroup root", func(t *testing.T) {
-		manager, err := NewCgroupManager("cgroupfs", "/sys/fs/cgroup", "custom-root")
-		if err != nil {
-			t.Fatalf("Failed to create cgroup manager with custom root: %v", err)
-		}
+		manager := NewCgroupManager("cgroupfs", "/sys/fs/cgroup", "custom-root")
 
 		path, err := manager.GetRootCgroupPath(CgroupCpuSubsystem)
 		if err != nil {

@@ -22,10 +22,21 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/moby/sys/userns"
 	cgroupsystemd "github.com/opencontainers/runc/libcontainer/cgroups/systemd"
+	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog/v2"
+)
+
+// Global variables for cgroup v2 detection
+var (
+	isUnified     bool
+	isUnifiedOnce sync.Once
+	CgroupVersion string
 )
 
 type CgroupSubsystem string
@@ -242,29 +253,39 @@ func DetectCgroupDriver() (string, error) {
 	return "", fmt.Errorf("unable to detect cgroup driver")
 }
 
-// DetectCgroupVersion detects the cgroup version on the system
-func DetectCgroupVersion() (string, error) {
-	// Check if cgroup v2 is mounted
-	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err == nil {
+// IsCgroupsV2 checks once if the CGroup V2 is in use.
+// This is a more robust implementation based on mature projects like runc.
+func IsCgroupsV2(unifiedMountpoint string) bool {
+	isUnifiedOnce.Do(func() {
+		var st unix.Statfs_t
+		err := unix.Statfs(unifiedMountpoint, &st)
+		if err != nil {
+			if os.IsNotExist(err) && userns.RunningInUserNS() {
+				// ignore the "not found" error if running in userns
+				klog.ErrorS(err, "%s missing, assuming cgroup v1", unifiedMountpoint)
+				isUnified = false
+				return
+			}
+			panic(fmt.Sprintf("cannot statfs cgroup root: %s", err))
+		}
+		isUnified = st.Type == unix.CGROUP2_SUPER_MAGIC
+	})
+	return isUnified
+}
+
+// DetectCgroupVersion detects the cgroup version on the system，只用IsUsingCgroupsV2判断
+func DetectCgroupVersion(cgroupRoot string) (string, error) {
+	if IsCgroupsV2(cgroupRoot) {
+		CgroupVersion = CgroupV2
 		return CgroupV2, nil
 	}
-
-	// Check if cgroup v1 is mounted
-	if _, err := os.Stat("/sys/fs/cgroup/cpu"); err == nil {
-		return CgroupV1, nil
-	}
-
-	// Check for hybrid mode (v1 and v2)
-	if _, err := os.Stat("/sys/fs/cgroup/unified"); err == nil {
-		return CgroupV2, nil
-	}
-
-	return "", fmt.Errorf("unable to detect cgroup version")
+	CgroupVersion = CgroupV1
+	return CgroupV1, nil
 }
 
 // NewCgroupManager creates a new cgroup manager based on the detected cgroup version
 func NewCgroupManager(cgroupDriver, cgroupRoot, kubeCgroupRoot string) CgroupManager {
-	cgroupVersion, err := DetectCgroupVersion()
+	cgroupVersion, err := DetectCgroupVersion(cgroupRoot)
 	if err != nil {
 		return nil
 	}
