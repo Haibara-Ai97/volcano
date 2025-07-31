@@ -19,7 +19,7 @@ func (c *CgroupHandler) SetCPUQoSLevel(podUID types.UID, qosClass corev1.PodQOSC
 		return fmt.Errorf("failed to get pod cgroup file(%s), error: %v", podUID, err)
 	}
 	switch c.cgroupVersion {
-	case "cgroupv1":
+	case cgroup.CgroupV1:
 		qosLevelFile := path.Join(cgroupPath, cgroup.CPUQoSLevelFile)
 		qosLevelByte := []byte(fmt.Sprintf("%d", qosLevel))
 
@@ -32,7 +32,7 @@ func (c *CgroupHandler) SetCPUQoSLevel(podUID types.UID, qosClass corev1.PodQOSC
 			return err
 		}
 		return nil
-	case "cgroupv2":
+	case cgroup.CgroupV2:
 		return c.setCPUWeightAndQuota(cgroupPath, qosLevel)
 	default:
 		return fmt.Errorf("invalid cgroup version: %s", c.cgroupVersion)
