@@ -1,6 +1,6 @@
 package utils
 
-// todo: read from configmap or what?
+// todo: read from configmap or calculate cpu and memory limit dynamic
 func CalculateCPUWeightFromQoSLevel(qosLevel int64) uint64 {
 	switch qosLevel {
 	case 2:

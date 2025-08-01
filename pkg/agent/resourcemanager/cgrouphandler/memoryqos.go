@@ -22,7 +22,7 @@ func (c *CgroupHandler) SetMemoryQoS(podUID types.UID, qosClass corev1.PodQOSCla
 	}
 
 	switch c.cgroupVersion {
-	case "cgroupv1":
+	case cgroup.CgroupV1:
 		qosLevelFile := path.Join(cgroupPath, cgroup.MemoryQoSLevelFile)
 		qosLevelInt64 := []byte(fmt.Sprintf("%d", extension.NormalizeQosLevel(qosLevel)))
 
@@ -35,7 +35,7 @@ func (c *CgroupHandler) SetMemoryQoS(podUID types.UID, qosClass corev1.PodQOSCla
 			return err
 		}
 		return nil
-	case "cgroupv2":
+	case cgroup.CgroupV2:
 		return c.setMemoryQoSV2(cgroupPath, qosLevel)
 	default:
 		return fmt.Errorf("invalid cgroup version: %s", c.cgroupVersion)

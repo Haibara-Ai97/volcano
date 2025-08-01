@@ -3,6 +3,7 @@ package systemdhandler
 import (
 	"fmt"
 
+	"github.com/godbus/dbus/v5"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"volcano.sh/volcano/pkg/agent/resourcemanager/utils"
@@ -24,26 +25,25 @@ func (s *SystemdHandler) setMemoryQoSViaDBus(serviceName string, qosLevel int64)
 		return fmt.Errorf("D-Bus connection not available")
 	}
 
-	// 计算内存值
+	// calculate memory limit
 	memoryHigh := utils.CalculateMemoryHighFromQoSLevel(qosLevel)
 	memoryLow := utils.CalculateMemoryLowFromQoSLevel(qosLevel)
 	memoryMin := utils.CalculateMemoryMinFromQoSLevel(qosLevel)
 
 	var properties []interface{}
 
-	// 设置MemoryHigh (软限制)
 	if memoryHigh > 0 {
-		properties = append(properties, "MemoryHigh", memoryHigh)
+		properties = append(properties, "MemoryHigh", dbus.MakeVariant(memoryHigh))
 	} else {
-		properties = append(properties, "MemoryHigh", uint64(18446744073709551615))
+		properties = append(properties, "MemoryHigh", dbus.MakeVariant(uint64(18446744073709551615)))
 	}
 
 	if memoryLow > 0 {
-		properties = append(properties, "MemoryLow", memoryLow)
+		properties = append(properties, "MemoryLow", dbus.MakeVariant(memoryLow))
 	}
 
 	if memoryMin > 0 {
-		properties = append(properties, "MemoryMin", memoryMin)
+		properties = append(properties, "MemoryMin", dbus.MakeVariant(memoryMin))
 	}
 
 	err := s.sendDBusToSystemd(serviceName, properties)
