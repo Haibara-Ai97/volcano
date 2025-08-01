@@ -21,6 +21,7 @@ func NewSystemdHandler(cgroupMgr cgroup.CgroupManager, cgroupVersion string) *Sy
 		// Log the error but don't fail initialization - the handler can still work for cgroupfs operations
 		// D-Bus operations will fail gracefully if needed
 		return &SystemdHandler{
+			CgroupHandler: cgrouphandler.NewCgroupHandler(cgroupMgr, cgroupVersion),
 			cgroupManager: cgroupMgr,
 			cgroupVersion: cgroupVersion,
 			conn:          nil, // Will be nil if connection failed
@@ -28,6 +29,7 @@ func NewSystemdHandler(cgroupMgr cgroup.CgroupManager, cgroupVersion string) *Sy
 	}
 
 	return &SystemdHandler{
+		CgroupHandler: cgrouphandler.NewCgroupHandler(cgroupMgr, cgroupVersion),
 		cgroupManager: cgroupMgr,
 		cgroupVersion: cgroupVersion,
 		conn:          conn,
