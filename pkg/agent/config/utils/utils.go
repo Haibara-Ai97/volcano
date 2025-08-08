@@ -52,6 +52,10 @@ const (
 	DefaultEvictingMemoryHighWatermark = 60
 	DefaultEvictingCPULowWatermark     = 30
 	DefaultEvictingMemoryLowWatermark  = 30
+
+	// CPU QoS config
+	DefaultCPUThrottlingThreshold = 80
+	DefaultCPUProtectionWatermark = 60
 )
 
 const (
@@ -109,6 +113,10 @@ func DefaultColocationConfig() *api.ColocationConfig {
 			EvictingMemoryHighWatermark: utilpointer.Int(DefaultEvictingMemoryHighWatermark),
 			EvictingCPULowWatermark:     utilpointer.Int(DefaultEvictingCPULowWatermark),
 			EvictingMemoryLowWatermark:  utilpointer.Int(DefaultEvictingMemoryLowWatermark),
+		},
+		CPUThrottlingConfig: &api.CPUThrottling{
+			CPUThrottlingThreshold: utilpointer.Int(DefaultCPUThrottlingThreshold),
+			CPUProtectionWatermark: utilpointer.Int(DefaultCPUProtectionWatermark),
 		},
 	}
 }
