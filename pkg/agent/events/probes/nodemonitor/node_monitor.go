@@ -248,6 +248,19 @@ func (m *monitor) detectCPUThrottling(node *v1.Node) {
 		return
 	}
 
+	if m.cpuThrottlingActive && cpuUsage >= int64(throttlingThreshold) {
+		event := framework.NodeCPUThrottleEvent{
+			TimeStamp: time.Now(),
+			Resource:  v1.ResourceCPU,
+			Action:    "continue",
+			Usage:     cpuUsage,
+		}
+		m.queue.Add(event)
+		klog.V(2).InfoS("CPU throttling continued", "usage",
+			cpuUsage, "throttlingThreshold", throttlingThreshold)
+		return
+	}
+
 	if m.cpuThrottlingActive && cpuUsage <= int64(protectionWatermark) {
 		m.cpuThrottlingActive = false
 		event := framework.NodeCPUThrottleEvent{

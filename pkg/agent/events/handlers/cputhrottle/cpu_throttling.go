@@ -75,7 +75,7 @@ func (h *CPUThrottleHandler) Handle(event interface{}) error {
 		"podCount", len(pods))
 
 	switch cpuEvent.Action {
-	case "start":
+	case "start", "continue":
 		return h.stepThrottleCPU(pods)
 	case "stop":
 		return h.stopCPUThrottle(pods)
